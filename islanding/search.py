@@ -26,14 +26,17 @@ def initial_spanning_tree(gbar, seed=0):
     return nx.minimum_spanning_tree(weighted, weight="weight")
 
 
-def decode(tree, topology):
-    """Decode a spanning tree of Gbar into island labels and failed nodes.
+def decode_islanding(tree, topology):
+    """Decode a spanning tree of Gbar into stable islands and failed nodes.
 
     Removing the (SOURCE, SINK) edge splits the tree into a SOURCE-side
     component (stable nodes) and a SINK-side component (failed nodes, Z).
-    Stable islands are the connected components formed by original edges
-    (both endpoints in V) among the stable nodes; each gets a distinct
-    positive label. All failed nodes share the reserved label 0.
+    Within the SOURCE-side component, SOURCE itself must be dropped before
+    taking connected components: SOURCE is adjacent to every original
+    node, so leaving it in would merge all islands into one. What remains
+    connects original nodes only through intact relay paths, so its
+    connected components -- projected onto original nodes -- are exactly
+    the stable islands.
     """
     split = tree.copy()
     split.remove_edge(SOURCE, SINK)
@@ -42,21 +45,16 @@ def decode(tree, topology):
     source_component = next(c for c in components if SOURCE in c)
 
     original_nodes = set(topology.nodes())
-    Z = sink_component & original_nodes
-    stable_nodes = source_component & original_nodes
+    Z = frozenset(sink_component & original_nodes)
 
-    island_graph = nx.Graph()
-    island_graph.add_nodes_from(stable_nodes)
-    for u, v in tree.edges():
-        if u in stable_nodes and v in stable_nodes:
-            island_graph.add_edge(u, v)
+    stable_remainder = source_component - {SOURCE}
+    island_subgraph = split.subgraph(stable_remainder)
 
-    labels = {}
-    for label, component in enumerate(nx.connected_components(island_graph), start=1):
-        for node in component:
-            labels[node] = label
+    islands = []
+    for component in nx.connected_components(island_subgraph):
+        projected = frozenset(component & original_nodes)
+        if projected:
+            islands.append(projected)
+    islands.sort(key=min)
 
-    for node in Z:
-        labels[node] = 0
-
-    return labels, Z
+    return islands, Z
