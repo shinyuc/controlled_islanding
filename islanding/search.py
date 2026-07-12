@@ -2,13 +2,28 @@
 decoding a spanning tree of Gbar into an islanding.
 """
 
+import random
+
 import networkx as nx
 
 from islanding.augmented import SOURCE, SINK
 
 
 def initial_spanning_tree(gbar, seed=0):
-    return nx.random_spanning_tree(gbar, seed=seed)
+    """Seeded-random spanning tree of gbar that always contains (SOURCE, SINK).
+
+    Assigns (SOURCE, SINK) a weight lower than every other edge and every
+    other edge a random weight in [0, 1) drawn from a seeded RNG, then
+    takes the minimum spanning tree. The globally minimum-weight edge is
+    always part of an MST, so (SOURCE, SINK) is guaranteed to be included.
+    """
+    rng = random.Random(seed)
+    weighted = gbar.copy()
+    for u, v in weighted.edges():
+        weighted[u][v]["weight"] = rng.random()
+    weighted[SOURCE][SINK]["weight"] = -1.0
+
+    return nx.minimum_spanning_tree(weighted, weight="weight")
 
 
 def decode(tree, topology):

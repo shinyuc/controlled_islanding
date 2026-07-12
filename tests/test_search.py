@@ -2,7 +2,7 @@
 
 import networkx as nx
 
-from islanding.augmented import augmented_graph
+from islanding.augmented import augmented_graph, SOURCE, SINK
 from islanding.search import initial_spanning_tree
 
 
@@ -34,3 +34,24 @@ def test_different_seeds_both_valid_trees(toy10_topology):
         assert tree.number_of_edges() == gbar.number_of_nodes() - 1
         assert nx.is_connected(tree)
         assert nx.is_tree(tree)
+
+
+def test_tree_always_contains_source_sink_edge(toy10_topology):
+    gbar = augmented_graph(toy10_topology)
+
+    tree_0 = initial_spanning_tree(gbar, seed=0)
+    tree_1 = initial_spanning_tree(gbar, seed=1)
+
+    assert tree_0.has_edge(SOURCE, SINK)
+    assert tree_1.has_edge(SOURCE, SINK)
+
+
+def test_gbar_unmutated(toy10_topology):
+    gbar = augmented_graph(toy10_topology)
+    node_count_before = gbar.number_of_nodes()
+    edge_count_before = gbar.number_of_edges()
+
+    initial_spanning_tree(gbar, seed=0)
+
+    assert gbar.number_of_nodes() == node_count_before
+    assert gbar.number_of_edges() == edge_count_before
