@@ -19,7 +19,9 @@ source .venv/bin/activate
 
 Install the package and its dependencies:
 
-```python -m pip install -e ".[dev]"```
+```
+python -m pip install -e ".[dev]"
+```
 
 
 
