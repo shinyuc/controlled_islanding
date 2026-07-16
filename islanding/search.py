@@ -26,17 +26,27 @@ def initial_spanning_tree(gbar, seed=0):
     return nx.minimum_spanning_tree(weighted, weight="weight")
 
 
+def _project_components(subgraph, original_nodes):
+    result = []
+    for component in nx.connected_components(subgraph):
+        projected = frozenset(component & original_nodes)
+        if projected:
+            result.append(projected)
+    result.sort(key=min)
+    return result
+
+
 def decode_islanding(tree, topology):
-    """Decode a spanning tree of Gbar into stable islands and failed nodes.
+    """Decode a spanning tree of Gbar into stable and unstable islands.
 
     Removing the (SOURCE, SINK) edge splits the tree into a SOURCE-side
-    component (stable nodes) and a SINK-side component (failed nodes, Z).
-    Within the SOURCE-side component, SOURCE itself must be dropped before
-    taking connected components: SOURCE is adjacent to every original
-    node, so leaving it in would merge all islands into one. What remains
-    connects original nodes only through intact relay paths, so its
-    connected components -- projected onto original nodes -- are exactly
-    the stable islands.
+    component (stable nodes) and a SINK-side component (failed nodes).
+    On each side, the supernode itself must be dropped before taking
+    connected components: SOURCE (resp. SINK) is adjacent to every
+    original node, so leaving it in would merge all islands on that side
+    into one. What remains connects original nodes only through intact
+    relay paths, so its connected components -- projected onto original
+    nodes -- are exactly the stable (resp. unstable) islands.
     """
     split = tree.copy()
     split.remove_edge(SOURCE, SINK)
@@ -45,19 +55,14 @@ def decode_islanding(tree, topology):
     source_component = next(c for c in components if SOURCE in c)
 
     original_nodes = set(topology.nodes())
-    Z = frozenset(sink_component & original_nodes)
 
-    stable_remainder = source_component - {SOURCE}
-    island_subgraph = split.subgraph(stable_remainder)
+    stable_subgraph = split.subgraph(source_component - {SOURCE})
+    stable_islands = _project_components(stable_subgraph, original_nodes)
 
-    islands = []
-    for component in nx.connected_components(island_subgraph):
-        projected = frozenset(component & original_nodes)
-        if projected:
-            islands.append(projected)
-    islands.sort(key=min)
+    unstable_subgraph = split.subgraph(sink_component - {SINK})
+    unstable_islands = _project_components(unstable_subgraph, original_nodes)
 
-    return islands, Z
+    return stable_islands, unstable_islands
 
 
 def decode_reconnection(tree, topology):
@@ -76,10 +81,10 @@ def decode_reconnection(tree, topology):
     must not be readmitted), plus the reconnected edges joining islands
     within that group.
     """
-    islands, Z = decode_islanding(tree, topology)
+    stable_islands, unstable_islands = decode_islanding(tree, topology)
 
     node_to_island = {}
-    for index, island in enumerate(islands):
+    for index, island in enumerate(stable_islands):
         for node in island:
             node_to_island[node] = index
 
@@ -97,13 +102,13 @@ def decode_reconnection(tree, topology):
             reconnected_edges.append((u, v, idx_u, idx_v))
 
     merge_graph = nx.Graph()
-    merge_graph.add_nodes_from(range(len(islands)))
+    merge_graph.add_nodes_from(range(len(stable_islands)))
     for _, _, idx_u, idx_v in reconnected_edges:
         merge_graph.add_edge(idx_u, idx_v)
 
     components = []
     for group in nx.connected_components(merge_graph):
-        constituent_islands = tuple(sorted((islands[i] for i in group), key=min))
+        constituent_islands = tuple(sorted((stable_islands[i] for i in group), key=min))
 
         component = nx.Graph()
         for island in constituent_islands:
@@ -121,4 +126,4 @@ def decode_reconnection(tree, topology):
 
     components.sort(key=lambda component: min(component.nodes()))
 
-    return components, Z
+    return components, unstable_islands
