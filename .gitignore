@@ -18,6 +18,7 @@ results/
 
 # Reference materials (copyrighted - keep local, do not commit)
 paper/
+docs/
 
 # OS / editor
 .DS_Store
