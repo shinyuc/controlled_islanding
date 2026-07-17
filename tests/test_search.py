@@ -244,7 +244,7 @@ class TestDecodeReconnection:
             (1, ("n", 1, 4, 1)), (("n", 1, 4, 4), 4),
         ])
 
-        components, unstable_islands = decode_reconnection(tree, topology)
+        components, unstable_islands, reconnected_edges = decode_reconnection(tree, topology)
 
         assert len(components) == 1
         c = components[0]
@@ -259,6 +259,9 @@ class TestDecodeReconnection:
         assert c.graph["islands"] == (frozenset({1, 2, 3}), frozenset({4, 5}))
         assert unstable_islands == []
 
+        assert (1, 4) in reconnected_edges
+        assert (2, 5) not in reconnected_edges
+
     def test_no_reconnection_two_components(self):
         # (1,4)'s relay path connects a-b but not b-v (r14_4 never reaches 4)
         # -> not middle-cut -> no reconnection -> islands stay separate.
@@ -270,7 +273,7 @@ class TestDecodeReconnection:
             (1, ("n", 1, 4, 1)), (("n", 1, 4, 1), ("n", 1, 4, 4)),
         ])
 
-        components, unstable_islands = decode_reconnection(tree, topology)
+        components, unstable_islands, reconnected_edges = decode_reconnection(tree, topology)
 
         assert len(components) == 2
         comp0, comp1 = components
@@ -286,6 +289,7 @@ class TestDecodeReconnection:
         assert comp1.graph["islands"] == (frozenset({4, 5}),)
 
         assert unstable_islands == []
+        assert reconnected_edges == set()
 
     def test_invariants_on_toy10(self, toy10_topology):
         gbar = augmented_graph(toy10_topology)
@@ -295,7 +299,7 @@ class TestDecodeReconnection:
         topology_nodes_before = list(toy10_topology.nodes())
         topology_edges_before = list(toy10_topology.edges())
 
-        components, unstable_islands = decode_reconnection(tree, toy10_topology)
+        components, unstable_islands, reconnected_edges = decode_reconnection(tree, toy10_topology)
 
         original = set(toy10_topology.nodes())
         topology_edge_set = {frozenset(e) for e in toy10_topology.edges()}
@@ -316,7 +320,21 @@ class TestDecodeReconnection:
                 assert frozenset({u, v}) in topology_edge_set
 
         # unstable_islands matches decode_islanding's unstable_islands.
-        assert unstable_islands == decode_islanding(tree, toy10_topology)[1]
+        stable_islands, unstable_islands_check = decode_islanding(tree, toy10_topology)
+        assert unstable_islands == unstable_islands_check
+
+        # Every reconnected edge is a sorted (min, max) tuple of original
+        # nodes belonging to two distinct stable islands.
+        node_to_island = {}
+        for index, island in enumerate(stable_islands):
+            for node in island:
+                node_to_island[node] = index
+
+        for u, v in reconnected_edges:
+            assert isinstance(u, int) and isinstance(v, int)
+            assert u < v
+            assert u in node_to_island and v in node_to_island
+            assert node_to_island[u] != node_to_island[v]
 
         # Components sorted by min node.
         min_nodes = [min(component.nodes()) for component in components]
@@ -327,3 +345,68 @@ class TestDecodeReconnection:
         assert {frozenset(e) for e in tree.edges()} == tree_edges_before
         assert list(toy10_topology.nodes()) == topology_nodes_before
         assert list(toy10_topology.edges()) == topology_edges_before
+
+    def test_reconnect_merges_two_of_three_stable_islands(self):
+        # 11 nodes, 5 islands: stable (1,2,3), (4,5), (6,7); unstable (8,9),
+        # (10,11). Each original edge's relay path follows one of three
+        # patterns:
+        #   full_path:    all 3 relay edges present -> intact edge
+        #   middle_cut:   outer edges present, middle relay edge missing ->
+        #                 candidate for reconnection if its endpoints land
+        #                 in two different stable islands
+        #   not_middle:   outer-i and middle present, outer-j missing -> the
+        #                 whole relay chain dangles off node i, never
+        #                 reaching j
+        #
+        # Only (1,4) is both middle-cut AND cross-island (islands {1,2,3}
+        # and {4,5}), so it is the sole reconnected edge, merging those two
+        # islands into one component while leaving {6,7} on its own. (3,5),
+        # (5,7), (4,6) are cross-island too but not_middle (not reconnected);
+        # (1,3) is middle-cut but NOT cross-island (both endpoints already
+        # in {1,2,3} via the intact 1-2-3 path), so it surfaces only as an
+        # intra-island edge, never as a reconnection.
+        full_path_edges = [(1, 2), (2, 3), (4, 5), (6, 7), (8, 9), (10, 11)]
+        middle_cut_edges = [(1, 3), (1, 4), (6, 8), (8, 10)]
+        not_middle_edges = [(3, 5), (5, 7), (4, 6), (7, 9), (9, 11)]
+
+        topology = Topology(
+            nodes=list(range(1, 12)),
+            edges=full_path_edges + middle_cut_edges + not_middle_edges,
+        )
+
+        tree_edges = [
+            (SOURCE, SINK),
+            (SOURCE, 1), (SOURCE, 4), (SOURCE, 6),
+            (SINK, 8), (SINK, 10),
+        ]
+        for i, j in full_path_edges:
+            relay_i, relay_j = ("n", i, j, i), ("n", i, j, j)
+            tree_edges += [(i, relay_i), (relay_i, relay_j), (relay_j, j)]
+        for i, j in middle_cut_edges:
+            relay_i, relay_j = ("n", i, j, i), ("n", i, j, j)
+            tree_edges += [(i, relay_i), (relay_j, j)]
+        for i, j in not_middle_edges:
+            relay_i, relay_j = ("n", i, j, i), ("n", i, j, j)
+            tree_edges += [(i, relay_i), (relay_i, relay_j)]
+
+        tree = nx.Graph()
+        tree.add_edges_from(tree_edges)
+
+        components, unstable_islands, reconnected_edges = decode_reconnection(tree, topology)
+
+        assert reconnected_edges == {(1, 4)}
+
+        assert len(components) == 2
+        comp_large, comp_small = components
+
+        assert set(comp_large.nodes()) == {1, 2, 3, 4, 5}
+        assert {frozenset(e) for e in comp_large.edges()} == {
+            frozenset({1, 2}), frozenset({2, 3}), frozenset({1, 3}),
+            frozenset({4, 5}), frozenset({1, 4}),
+        }
+        assert not comp_large.has_edge(3, 5)
+
+        assert set(comp_small.nodes()) == {6, 7}
+        assert {frozenset(e) for e in comp_small.edges()} == {frozenset({6, 7})}
+
+        assert unstable_islands == [frozenset({8, 9}), frozenset({10, 11})]

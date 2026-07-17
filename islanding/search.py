@@ -126,4 +126,6 @@ def decode_reconnection(tree, topology):
 
     components.sort(key=lambda component: min(component.nodes()))
 
-    return components, unstable_islands
+    reconnected_edge_set = {(u, v) for u, v, _, _ in reconnected_edges}
+
+    return components, unstable_islands, reconnected_edge_set
