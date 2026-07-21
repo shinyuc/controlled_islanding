@@ -1,7 +1,9 @@
 """Tests for islanding/cost.py, reproducing the worked example in
-docs/cost_function_spec.md section 6 (11-node, 5-island reconnection case).
+docs/cost_function_spec.md section 6 (11-node, 5-island reconnection case)
+and the F5 fixture in section 13.
 """
 
+import numpy as np
 import pytest
 
 from islanding.topology import Topology
@@ -9,6 +11,7 @@ from islanding.cost import (
     CostData, AlgorithmConfig, canon,
     f1_unstable_nodes, f2_unstable_edges, f3_operation_edges,
     f4_reconnection, F,
+    linear_consensus_model, f5_stability_penalty,
 )
 
 
@@ -61,3 +64,74 @@ def test_worked_example_terms_and_combined_cost():
 
     assert F(13, 7, 23, 2.8) == pytest.approx(40.2)
     assert F(f1, f2, f3, f4) == pytest.approx(40.2)
+
+
+def test_F_adds_nonzero_f5():
+    assert F(13, 7, 23, 2.8, 5.0) == pytest.approx(45.2)
+
+
+def _f5_fixture():
+    # Nodes 1-7, stable-island structure from the 11-node fixture:
+    # islands {1,2,3} (triangle), {4,5}, {6,7}.
+    topology = Topology(
+        nodes=[1, 2, 3, 4, 5, 6, 7],
+        edges=[(1, 2), (1, 3), (2, 3), (4, 5), (6, 7)],
+    )
+
+    # w_1 = -5 is the faulty (grounding-sign-flipped) node; all others = 1.
+    node_weights = {1: -5, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1}
+    edge_weights = {(1, 2): 1, (1, 3): 1, (2, 3): 1, (4, 5): 1, (6, 7): 1}
+    model = linear_consensus_model(node_weights, edge_weights)
+
+    config = AlgorithmConfig(
+        kappa_op=1.0, kappa_rec=0.7, alpha_1=1.0, beta=1.0, k_1=1.0, P_1=1,
+    )
+
+    return topology, model, config
+
+
+def _eigenvector_aligned_samples():
+    # L_{1,2,3} = diag(-5,1,1) + Laplacian(triangle) = [[-3,-1,-1],[-1,3,-1],[-1,-1,3]].
+    # Hand-verified via numpy.linalg.eigh: eigenvalues [-3.372, 2.372, 4.0].
+    # The eigenvector below is the one for the most negative eigenvalue
+    # (-3.372), which maximizes bracket = x^T((k_1/2)I - L_r)x for unit x;
+    # with k_1=1 this gives bracket = 0.5 - (-3.372) = 3.872 > 0, so the
+    # hinge for island {1,2,3} fires deterministically -- no reliance on
+    # random sampling. Nodes 4-7 are left at 0 (irrelevant: islands {4,5}
+    # and {6,7} have L_r eigenvalues {1,3}, both >= k_1/2 = 0.5, so their
+    # bracket is <= 0 for ANY state, not just zero).
+    samples = np.zeros((1, 7, 1))
+    samples[0, 0, 0] = -0.96705436  # node 1
+    samples[0, 1, 0] = -0.18000814  # node 2
+    samples[0, 2, 0] = -0.18000814  # node 3
+    return samples
+
+
+def test_f5_hinge_fires_on_faulty_island():
+    topology, model, config = _f5_fixture()
+    samples = _eigenvector_aligned_samples()
+    stable_islands = [frozenset({1, 2, 3}), frozenset({4, 5}), frozenset({6, 7})]
+
+    f5 = f5_stability_penalty(stable_islands, topology, model, samples, config)
+
+    assert f5 > 0
+
+
+def test_f5_no_false_positive_when_faulty_island_excluded():
+    topology, model, config = _f5_fixture()
+    samples = _eigenvector_aligned_samples()
+    stable_islands = [frozenset({4, 5}), frozenset({6, 7})]
+
+    f5 = f5_stability_penalty(stable_islands, topology, model, samples, config)
+
+    assert f5 == 0
+
+
+def test_f5_zero_state_gives_zero_even_with_faulty_island():
+    topology, model, config = _f5_fixture()
+    samples = np.zeros((1, 7, 1))
+    stable_islands = [frozenset({1, 2, 3}), frozenset({4, 5}), frozenset({6, 7})]
+
+    f5 = f5_stability_penalty(stable_islands, topology, model, samples, config)
+
+    assert f5 == 0
