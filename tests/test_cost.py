@@ -3,6 +3,8 @@ docs/cost_function_spec.md section 6 (11-node, 5-island reconnection case)
 and the F5 fixture in section 13.
 """
 
+from dataclasses import replace
+
 import networkx as nx
 import numpy as np
 import pytest
@@ -119,8 +121,16 @@ def test_f5_hinge_fires_on_faulty_island():
 
 
 def test_f5_no_false_positive_when_faulty_island_excluded():
+    # islands {4,5} and {6,7} have L_r eigenvalues {1,3}, both >= k_1/2 =
+    # 0.5, so bracket = x^T((k_1/2)I - L_r)x <= 0 for ANY state -- this
+    # holds for any draw, so use real samples from the model's sampler
+    # (fixed seed for reproducibility) rather than a hand-picked state.
     topology, model, config = _f5_fixture()
-    samples = _eigenvector_aligned_samples()
+    config = replace(config, P_1=10)
+
+    np.random.seed(0)
+    samples = model.sampler(config.beta, config.P_1, 7, 1)
+
     stable_islands = [frozenset({4, 5}), frozenset({6, 7})]
 
     f5 = f5_stability_penalty(stable_islands, topology, model, samples, config)
