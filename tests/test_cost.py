@@ -3,6 +3,7 @@ docs/cost_function_spec.md section 6 (11-node, 5-island reconnection case)
 and the F5 fixture in section 13.
 """
 
+import networkx as nx
 import numpy as np
 import pytest
 
@@ -11,7 +12,7 @@ from islanding.cost import (
     CostData, AlgorithmConfig, canon,
     f1_unstable_nodes, f2_unstable_edges, f3_operation_edges,
     f4_reconnection, F,
-    linear_consensus_model, f5_stability_penalty,
+    linear_consensus_model, f5_stability_penalty, f6_reconnection_stability,
 )
 
 
@@ -135,3 +136,98 @@ def test_f5_zero_state_gives_zero_even_with_faulty_island():
     f5 = f5_stability_penalty(stable_islands, topology, model, samples, config)
 
     assert f5 == 0
+
+
+def _f6_model_and_config():
+    # Same weights as the F5 fixture, plus reconnected edge (1,4), w_14 = 5.
+    node_weights = {1: -1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1}
+    edge_weights = {
+        (1, 2): 1, (1, 3): 1, (2, 3): 1, (4, 5): 1, (6, 7): 1, (1, 4): 5,
+    }
+    model = linear_consensus_model(node_weights, edge_weights)
+
+    config = AlgorithmConfig(
+        kappa_op=1.0, kappa_rec=0.7, alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
+    )
+    return model, config
+
+
+def _f6_eigenvector_aligned_samples():
+    # Same eigenvector-aligned state as the F5 fixture: (2,1,1) normalized,
+    # in the kernel of L_{1,2,3} = [[1,-1,-1],[-1,3,-1],[-1,-1,3]]. With
+    # k_2=0.2, bracket at this direction for the UNMERGED island {1,2,3} is
+    # k_2/2 - 0 = 0.1 > 0 (hand-verified via numpy.linalg.eigvalsh).
+    # Nodes 4-7 are left at 0 -- irrelevant, since both the merged component
+    # {1,2,3,4,5} (eigenvalues [0.459, 1.866, 3, 4, 11.675], all >= k_2/2 =
+    # 0.1) and the standalone islands {4,5}, {6,7} (eigenvalues {1,3} each)
+    # have bracket <= 0 for ANY state, hand-verified the same way.
+    samples = np.zeros((1, 7, 1))
+    samples[0, 0, 0] = 0.81649658  # node 1
+    samples[0, 1, 0] = 0.40824829  # node 2
+    samples[0, 2, 0] = 0.40824829  # node 3
+    return samples
+
+
+def _merged_components():
+    # {1,2,3,4,5}: islands {1,2,3} and {4,5} merged via reconnected edge
+    # (1,4). Edge set is (1,2),(2,3),(1,3),(4,5),(1,4) -- NOT (3,5), which
+    # is a cut edge whose endpoints land in the same component but was
+    # never reconnected.
+    merged = nx.Graph()
+    merged.add_edges_from([(1, 2), (2, 3), (1, 3), (4, 5), (1, 4)])
+
+    # {6,7}: stands alone.
+    standalone = nx.Graph()
+    standalone.add_edges_from([(6, 7)])
+
+    return [merged, standalone]
+
+
+def _unmerged_components():
+    # No reconnection: each stable island is its own component.
+    island_123 = nx.Graph()
+    island_123.add_edges_from([(1, 2), (2, 3), (1, 3)])
+
+    island_45 = nx.Graph()
+    island_45.add_edges_from([(4, 5)])
+
+    island_67 = nx.Graph()
+    island_67.add_edges_from([(6, 7)])
+
+    return [island_123, island_45, island_67]
+
+
+def test_f6_reconnection_rescues_failing_island():
+    model, config = _f6_model_and_config()
+    samples = _f6_eigenvector_aligned_samples()
+    components = _merged_components()
+
+    f6 = f6_reconnection_stability(components, model, samples, config)
+
+    assert f6 == 0
+
+
+def test_f6_hinge_fires_when_reconnection_absent():
+    model, config = _f6_model_and_config()
+    samples = _f6_eigenvector_aligned_samples()
+    components = _unmerged_components()
+
+    f6 = f6_reconnection_stability(components, model, samples, config)
+
+    assert f6 > 0
+
+
+def test_f6_zero_state_gives_zero():
+    model, config = _f6_model_and_config()
+    samples = np.zeros((1, 7, 1))
+    components = _merged_components()
+
+    f6 = f6_reconnection_stability(components, model, samples, config)
+
+    assert f6 == 0
+
+
+def test_f6_merged_component_excludes_cut_edge_3_5():
+    merged_component = _merged_components()[0]
+    edge_set = {frozenset(e) for e in merged_component.edges()}
+    assert frozenset({3, 5}) not in edge_set

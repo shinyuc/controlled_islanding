@@ -25,6 +25,10 @@ class AlgorithmConfig:
     beta: float = 1.0
     k_1: float = 1.0
     P_1: int = 1
+    alpha_2: float = 1.0
+    gamma: float = 1.0
+    k_2: float = 1.0
+    P_2: int = 1
 
     def __post_init__(self):
         assert self.kappa_op > self.kappa_rec
@@ -32,6 +36,10 @@ class AlgorithmConfig:
         assert self.beta > 0
         assert self.k_1 > 0
         assert self.P_1 > 0
+        assert self.alpha_2 > 0
+        assert self.gamma > 0
+        assert self.k_2 > 0
+        assert self.P_2 > 0
 
 
 def canon(edge):
@@ -157,6 +165,34 @@ def linear_consensus_model(node_weights, edge_weights):
     )
 
 
+def _stability_bracket(nodes, edges, neighbors, states, model, k):
+    """Shared bracket computation for F5 and F6 (spec sections 9 and 14).
+
+    `nodes` is the unit's node set (an island for F5, a reconnected
+    component for F6), `edges` its within-unit edge set, `neighbors[i]`
+    the set of within-unit neighbours of i, and `states` a dict of
+    node -> x_i for this sample. Returns max(bracket, 0.0).
+    """
+    grad_W = {i: model.grad_W_i(i, states[i]) for i in nodes}
+    for u, v in edges:
+        grad_u, grad_v = model.grad_W_ij(u, v, states[u], states[v])
+        grad_W[u] = grad_W[u] + grad_u
+        grad_W[v] = grad_W[v] + grad_v
+
+    dyn = {}
+    for i in nodes:
+        value = model.f_i(i, states[i])
+        for j in neighbors[i]:
+            value = value + model.f_ij(i, j, states[i], states[j])
+        dyn[i] = value
+
+    W = sum(model.W_i(i, states[i]) for i in nodes)
+    W += sum(model.W_ij(u, v, states[u], states[v]) for u, v in edges)
+
+    bracket = sum(float(np.dot(grad_W[i], dyn[i])) for i in nodes) + k * W
+    return max(bracket, 0.0)
+
+
 def f5_stability_penalty(stable_islands, topology, model, samples, config):
     """Stability-penalty term F5 (spec section 9).
 
@@ -187,26 +223,50 @@ def f5_stability_penalty(stable_islands, topology, model, samples, config):
 
             states = {i: sample[node_index[i]] for i in island}
 
-            grad_W_r = {i: model.grad_W_i(i, states[i]) for i in island}
-            for u, v in edges_r:
-                grad_u, grad_v = model.grad_W_ij(u, v, states[u], states[v])
-                grad_W_r[u] = grad_W_r[u] + grad_u
-                grad_W_r[v] = grad_W_r[v] + grad_v
-
-            dyn = {}
-            for i in island:
-                value = model.f_i(i, states[i])
-                for j in neighbors[i]:
-                    value = value + model.f_ij(i, j, states[i], states[j])
-                dyn[i] = value
-
-            W_r = sum(model.W_i(i, states[i]) for i in island)
-            W_r += sum(model.W_ij(u, v, states[u], states[v]) for u, v in edges_r)
-
-            bracket = (
-                sum(float(np.dot(grad_W_r[i], dyn[i])) for i in island)
-                + config.k_1 * W_r
+            total += _stability_bracket(
+                island, edges_r, neighbors, states, model, config.k_1
             )
-            total += max(bracket, 0.0)
 
     return config.alpha_1 / config.P_1 * total
+
+
+def f6_reconnection_stability(components, model, samples, config):
+    """Stability-penalty term F6 (spec section 14).
+
+    Evaluated per sample and per reconnected component. Each component is
+    an nx.Graph already carrying exactly V_s^rec and E_s^rec (per
+    decode_reconnection's construction), so component.edges() and
+    component.neighbors(i) are used directly -- no within-unit filtering
+    needed here, unlike F5.
+
+    No topology argument (per spec section 15): node order along the
+    samples' middle axis is `sorted(union of all components' nodes)`.
+    This is only consistent with how `samples` was generated if that
+    union is the full node set the sampler was built over -- true for a
+    system with no unstable islands (as in the worked example), since
+    then every original node appears in exactly one component. A system
+    with unstable islands would need a wider/explicit convention; that
+    case isn't exercised here.
+    """
+    if len(samples) != config.P_2:
+        raise ValueError(
+            f"len(samples) ({len(samples)}) != config.P_2 ({config.P_2}); "
+            "F6 would silently average by the wrong denominator."
+        )
+
+    all_nodes = sorted(set().union(*(set(c.nodes()) for c in components))) if components else []
+    node_index = {node: idx for idx, node in enumerate(all_nodes)}
+
+    total = 0.0
+    for sample in samples:
+        for component in components:
+            nodes = list(component.nodes())
+            edges = list(component.edges())
+            neighbors = {i: set(component.neighbors(i)) for i in nodes}
+            states = {i: sample[node_index[i]] for i in nodes}
+
+            total += _stability_bracket(
+                nodes, edges, neighbors, states, model, config.k_2
+            )
+
+    return config.alpha_2 / config.P_2 * total
