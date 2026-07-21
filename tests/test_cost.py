@@ -78,8 +78,8 @@ def _f5_fixture():
         edges=[(1, 2), (1, 3), (2, 3), (4, 5), (6, 7)],
     )
 
-    # w_1 = -5 is the faulty (grounding-sign-flipped) node; all others = 1.
-    node_weights = {1: -5, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1}
+    # w_1 = -1 is the faulty (grounding-sign-flipped) node; all others = 1.
+    node_weights = {1: -1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1}
     edge_weights = {(1, 2): 1, (1, 3): 1, (2, 3): 1, (4, 5): 1, (6, 7): 1}
     model = linear_consensus_model(node_weights, edge_weights)
 
@@ -91,19 +91,19 @@ def _f5_fixture():
 
 
 def _eigenvector_aligned_samples():
-    # L_{1,2,3} = diag(-5,1,1) + Laplacian(triangle) = [[-3,-1,-1],[-1,3,-1],[-1,-1,3]].
-    # Hand-verified via numpy.linalg.eigh: eigenvalues [-3.372, 2.372, 4.0].
-    # The eigenvector below is the one for the most negative eigenvalue
-    # (-3.372), which maximizes bracket = x^T((k_1/2)I - L_r)x for unit x;
-    # with k_1=1 this gives bracket = 0.5 - (-3.372) = 3.872 > 0, so the
-    # hinge for island {1,2,3} fires deterministically -- no reliance on
-    # random sampling. Nodes 4-7 are left at 0 (irrelevant: islands {4,5}
-    # and {6,7} have L_r eigenvalues {1,3}, both >= k_1/2 = 0.5, so their
-    # bracket is <= 0 for ANY state, not just zero).
+    # L_{1,2,3} = diag(-1,1,1) + Laplacian(triangle) = [[1,-1,-1],[-1,3,-1],[-1,-1,3]].
+    # Hand-verified via numpy.linalg.eigh: eigenvalues [0, 3, 4], with (2,1,1)
+    # (normalized) in the kernel (L @ (2,1,1) == 0 exactly). That kernel
+    # direction maximizes bracket = x^T((k_1/2)I - L_r)x for unit x; with
+    # k_1=1 this gives bracket = 0.5 - 0 = 0.5 > 0, so the hinge for island
+    # {1,2,3} fires deterministically -- no reliance on random sampling.
+    # Nodes 4-7 are left at 0 (irrelevant: islands {4,5} and {6,7} have L_r
+    # eigenvalues {1,3}, both >= k_1/2 = 0.5, so their bracket is <= 0 for
+    # ANY state, not just zero).
     samples = np.zeros((1, 7, 1))
-    samples[0, 0, 0] = -0.96705436  # node 1
-    samples[0, 1, 0] = -0.18000814  # node 2
-    samples[0, 2, 0] = -0.18000814  # node 3
+    samples[0, 0, 0] = 0.81649658  # node 1
+    samples[0, 1, 0] = 0.40824829  # node 2
+    samples[0, 2, 0] = 0.40824829  # node 3
     return samples
 
 
