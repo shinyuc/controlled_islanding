@@ -208,8 +208,16 @@ def _unmerged_components():
 
 
 def test_f6_reconnection_rescues_failing_island():
+    # Component {1,2,3,4,5} has lambda_min = 0.459 >= k_2/2 = 0.1, and
+    # {6,7} has lambda_min = 1 >= 0.1, so bracket <= 0 for ANY state -- this
+    # holds for any draw, so use real samples from the model's sampler
+    # (fixed seed for reproducibility) rather than a hand-picked state.
     model, config = _f6_model_and_config()
-    samples = _f6_eigenvector_aligned_samples()
+    config = replace(config, P_2=10)
+
+    np.random.seed(0)
+    samples = model.sampler(config.gamma, config.P_2, 7, 1)
+
     components = _merged_components()
 
     f6 = f6_reconnection_stability(components, model, samples, config)
