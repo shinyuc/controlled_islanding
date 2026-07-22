@@ -230,7 +230,7 @@ def f5_stability_penalty(stable_islands, topology, model, samples, config):
     return config.alpha_1 / config.P_1 * total
 
 
-def f6_reconnection_stability(components, model, samples, config):
+def f6_reconnection_stability(components, topology, model, samples, config):
     """Stability-penalty term F6 (spec section 14).
 
     Evaluated per sample and per reconnected component. Each component is
@@ -239,14 +239,10 @@ def f6_reconnection_stability(components, model, samples, config):
     component.neighbors(i) are used directly -- no within-unit filtering
     needed here, unlike F5.
 
-    No topology argument (per spec section 15): node order along the
-    samples' middle axis is `sorted(union of all components' nodes)`.
-    This is only consistent with how `samples` was generated if that
-    union is the full node set the sampler was built over -- true for a
-    system with no unstable islands (as in the worked example), since
-    then every original node appears in exactly one component. A system
-    with unstable islands would need a wider/explicit convention; that
-    case isn't exercised here.
+    topology is used ONLY for node ordering (identical to
+    f5_stability_penalty): node order along the samples' middle axis is
+    `sorted(topology.nodes())`, matching how `samples` was generated over
+    the full node set.
     """
     if len(samples) != config.P_2:
         raise ValueError(
@@ -254,8 +250,8 @@ def f6_reconnection_stability(components, model, samples, config):
             "F6 would silently average by the wrong denominator."
         )
 
-    all_nodes = sorted(set().union(*(set(c.nodes()) for c in components))) if components else []
-    node_index = {node: idx for idx, node in enumerate(all_nodes)}
+    nodes_all = sorted(topology.nodes())
+    node_index = {node: idx for idx, node in enumerate(nodes_all)}
 
     total = 0.0
     for sample in samples:

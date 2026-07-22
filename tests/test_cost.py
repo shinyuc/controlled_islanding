@@ -148,8 +148,16 @@ def test_f5_zero_state_gives_zero_even_with_faulty_island():
     assert f5 == 0
 
 
-def _f6_model_and_config():
-    # Same weights as the F5 fixture, plus reconnected edge (1,4), w_14 = 5.
+def _f6_topology_model_and_config():
+    # Same nodes/weights as the F5 fixture, plus reconnected edge (1,4),
+    # w_14 = 5. topology carries the full 7-node system so
+    # f6_reconnection_stability's node ordering matches how samples were
+    # generated (sorted(topology.nodes())), same convention as F5.
+    topology = Topology(
+        nodes=[1, 2, 3, 4, 5, 6, 7],
+        edges=[(1, 2), (1, 3), (2, 3), (4, 5), (6, 7)],
+    )
+
     node_weights = {1: -1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1}
     edge_weights = {
         (1, 2): 1, (1, 3): 1, (2, 3): 1, (4, 5): 1, (6, 7): 1, (1, 4): 5,
@@ -159,7 +167,7 @@ def _f6_model_and_config():
     config = AlgorithmConfig(
         kappa_op=1.0, kappa_rec=0.7, alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
     )
-    return model, config
+    return topology, model, config
 
 
 def _f6_eigenvector_aligned_samples():
@@ -212,7 +220,7 @@ def test_f6_reconnection_rescues_failing_island():
     # {6,7} has lambda_min = 1 >= 0.1, so bracket <= 0 for ANY state -- this
     # holds for any draw, so use real samples from the model's sampler
     # (fixed seed for reproducibility) rather than a hand-picked state.
-    model, config = _f6_model_and_config()
+    topology, model, config = _f6_topology_model_and_config()
     config = replace(config, P_2=10)
 
     np.random.seed(0)
@@ -220,27 +228,27 @@ def test_f6_reconnection_rescues_failing_island():
 
     components = _merged_components()
 
-    f6 = f6_reconnection_stability(components, model, samples, config)
+    f6 = f6_reconnection_stability(components, topology, model, samples, config)
 
     assert f6 == 0
 
 
 def test_f6_hinge_fires_when_reconnection_absent():
-    model, config = _f6_model_and_config()
+    topology, model, config = _f6_topology_model_and_config()
     samples = _f6_eigenvector_aligned_samples()
     components = _unmerged_components()
 
-    f6 = f6_reconnection_stability(components, model, samples, config)
+    f6 = f6_reconnection_stability(components, topology, model, samples, config)
 
     assert f6 > 0
 
 
 def test_f6_zero_state_gives_zero():
-    model, config = _f6_model_and_config()
+    topology, model, config = _f6_topology_model_and_config()
     samples = np.zeros((1, 7, 1))
     components = _merged_components()
 
-    f6 = f6_reconnection_stability(components, model, samples, config)
+    f6 = f6_reconnection_stability(components, topology, model, samples, config)
 
     assert f6 == 0
 
@@ -249,3 +257,50 @@ def test_f6_merged_component_excludes_cut_edge_3_5():
     merged_component = _merged_components()[0]
     edge_set = {frozenset(e) for e in merged_component.edges()}
     assert frozenset({3, 5}) not in edge_set
+
+
+def test_f6_node_indexing_uses_global_not_component_local_order():
+    # Regression test for interleaved node labels: stable nodes {1,2,5,6},
+    # unstable {3,4}. Global order sorted(topology.nodes()) is
+    # [1,2,3,4,5,6] -> node 5 at index 4, node 6 at index 5. The union of
+    # component nodes is only {1,2,5,6} -> a (now-removed) local-index
+    # scheme would put node 5 at index 2, node 6 at index 3 -- silently
+    # reading the unstable nodes' rows instead.
+    #
+    # samples is built using the CORRECT global convention: nodes 5 and 6
+    # (indices 4, 5) are exactly zero, so both components should see a
+    # zero state and contribute exactly 0. Indices 2 and 3 (nodes 3, 4 --
+    # never touched by any component) are deliberately set to the
+    # eigenvector direction that fires component {5,6}'s hinge (hand-
+    # verified via numpy.linalg.eigh on L_{5,6} = diag(-1,1) +
+    # Laplacian(edge) = [[0,-1],[-1,2]], eigenvalues [-0.414, 2.414];
+    # bracket at that eigenvector with k_2=0.2 is 0.514 > 0). If
+    # f6_reconnection_stability ever again indexed by component-local
+    # order, it would misread node 5 and 6's states from these rows and
+    # report F6 > 0 instead of the correct 0.
+    topology = Topology(
+        nodes=[1, 2, 3, 4, 5, 6],
+        edges=[(1, 2), (3, 4), (5, 6)],
+    )
+
+    node_weights = {1: 1, 2: 1, 3: 1, 4: 1, 5: -1, 6: 1}
+    edge_weights = {(1, 2): 1, (3, 4): 1, (5, 6): 1}
+    model = linear_consensus_model(node_weights, edge_weights)
+
+    config = AlgorithmConfig(
+        kappa_op=1.0, kappa_rec=0.7, alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
+    )
+
+    component_12 = nx.Graph()
+    component_12.add_edges_from([(1, 2)])
+    component_56 = nx.Graph()
+    component_56.add_edges_from([(5, 6)])
+    components = [component_12, component_56]
+
+    samples = np.zeros((1, 6, 1))
+    samples[0, 2, 0] = -0.92387953  # node 3's row -- would-be node 5 under the old bug
+    samples[0, 3, 0] = -0.38268343  # node 4's row -- would-be node 6 under the old bug
+
+    f6 = f6_reconnection_stability(components, topology, model, samples, config)
+
+    assert f6 == 0
