@@ -29,6 +29,9 @@ class AlgorithmConfig:
     gamma: float = 1.0
     k_2: float = 1.0
     P_2: int = 1
+    epsilon: float = 0.01
+    max_iterations: int = 100
+    swap_supernode_edges: bool = True
 
     def __post_init__(self):
         assert self.kappa_op > self.kappa_rec
@@ -40,6 +43,11 @@ class AlgorithmConfig:
         assert self.gamma > 0
         assert self.k_2 > 0
         assert self.P_2 > 0
+        assert self.epsilon > 0
+        # max_iterations == 0 is a legal, meaningful config (immediate stop
+        # with reason="max_iterations"), exercised by local_search_spec.md
+        # section 7 assertion 4 -- so this is >= 0, not strictly positive.
+        assert self.max_iterations >= 0
 
 
 def canon(edge):
