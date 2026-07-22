@@ -10,6 +10,8 @@ from typing import Callable
 
 import numpy as np
 
+from islanding.counterexample import linear_counterexample
+
 
 @dataclass(frozen=True)
 class CostData:
@@ -113,6 +115,8 @@ class SystemModel:
         grad_W_ij(i, j, x_i, x_j) -> (d/dx_i, d/dx_j)   gradient, both endpoints
         sampler(threshold, P1, n, d) -> (P1, n, d) array
         inflation(topology) -> float
+        counterexample(unit_nodes, unit_edges, node_order, d, threshold_radius)
+            -> list of (n, d) witness arrays
 
     Linear consensus's Lyapunov terms (W_i, W_ij, grad_W_i, grad_W_ij) are
     weight-independent (constant or zero) and simply ignore i, j; only
@@ -139,6 +143,7 @@ class SystemModel:
     grad_W_ij: Callable
     sampler: Callable
     inflation: Callable
+    counterexample: Callable
 
 
 def linear_consensus_model(node_weights, edge_weights):
@@ -184,6 +189,7 @@ def linear_consensus_model(node_weights, edge_weights):
         f_i=f_i, f_ij=f_ij, W_i=W_i, W_ij=W_ij,
         grad_W_i=grad_W_i, grad_W_ij=grad_W_ij, sampler=sampler,
         inflation=inflation,
+        counterexample=linear_counterexample(node_weights, edge_weights),
     )
 
 
