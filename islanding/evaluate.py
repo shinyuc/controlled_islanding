@@ -20,8 +20,24 @@ class Problem:
     model: object
     cost_data: object
     config: object
-    samples_1: object  # for F5, drawn from {W <= beta} with P_1 points
-    samples_2: object  # for F6, drawn from {W <= gamma} with P_2 points
+    samples_1: object  # for F5, drawn from {W <= (1+inflation)*beta} with P_1 points
+    samples_2: object  # for F6, drawn from {W <= (1+inflation)*gamma} with P_2 points
+
+
+def draw_samples(topology, model, config, n, d):
+    """Draw both fixed sample sets, applying the model's inflation factor.
+
+    Omega     = {x : W(x) <= (1 + inflation) * beta}    -- for F5
+    Omega_hat = {x : W(x) <= (1 + inflation) * gamma}   -- for F6
+
+    Same factor for both; only the base radius (beta vs gamma) differs.
+    model.sampler itself stays inflation-agnostic -- it only ever receives
+    a plain, already-inflated threshold.
+    """
+    factor = 1.0 + model.inflation(topology)
+    samples_1 = model.sampler(config.beta * factor, config.P_1, n, d)
+    samples_2 = model.sampler(config.gamma * factor, config.P_2, n, d)
+    return samples_1, samples_2
 
 
 def evaluate(A, problem):

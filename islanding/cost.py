@@ -111,7 +111,8 @@ class SystemModel:
         W_ij(i, j, x_i, x_j) -> scalar              Lyapunov, edge term
         grad_W_i(i, x_i) -> vector                 gradient, node term
         grad_W_ij(i, j, x_i, x_j) -> (d/dx_i, d/dx_j)   gradient, both endpoints
-        sampler(beta, P1, n, d) -> (P1, n, d) array
+        sampler(threshold, P1, n, d) -> (P1, n, d) array
+        inflation(topology) -> float
 
     Linear consensus's Lyapunov terms (W_i, W_ij, grad_W_i, grad_W_ij) are
     weight-independent (constant or zero) and simply ignore i, j; only
@@ -120,6 +121,14 @@ class SystemModel:
     "neighbour" in whatever order the caller needs (the underlying weight
     lookup is symmetric via canon()), so callers never need to sign-flip
     based on canonical (min, max) order.
+
+    inflation(topology) returns max_i{d_i * alpha_bar_i}, where d_i is
+    node i's degree in the original graph -- an inflation factor applied
+    to BOTH sublevel-set radii before sampling:
+        Omega     = {x : W(x) <= (1 + inflation) * beta}
+        Omega_hat = {x : W(x) <= (1 + inflation) * gamma}
+    sampler itself stays inflation-agnostic: it always takes a plain
+    threshold (already inflated by the caller), never beta/gamma directly.
     """
 
     f_i: Callable
@@ -129,6 +138,7 @@ class SystemModel:
     grad_W_i: Callable
     grad_W_ij: Callable
     sampler: Callable
+    inflation: Callable
 
 
 def linear_consensus_model(node_weights, edge_weights):
@@ -158,18 +168,22 @@ def linear_consensus_model(node_weights, edge_weights):
     def grad_W_ij(i, j, x_i, x_j):
         return (np.zeros_like(x_i), np.zeros_like(x_j))
 
-    def sampler(beta, P1, n, d):
+    def sampler(threshold, P1, n, d):
         dim = n * d
         directions = np.random.normal(size=(P1, dim))
         directions /= np.linalg.norm(directions, axis=1, keepdims=True)
         radial_fractions = np.random.uniform(size=(P1, 1)) ** (1.0 / dim)
-        radius = (2.0 * beta) ** 0.5
+        radius = (2.0 * threshold) ** 0.5
         points = directions * radial_fractions * radius
         return points.reshape(P1, n, d)
+
+    def inflation(topology):
+        return 0.0
 
     return SystemModel(
         f_i=f_i, f_ij=f_ij, W_i=W_i, W_ij=W_ij,
         grad_W_i=grad_W_i, grad_W_ij=grad_W_ij, sampler=sampler,
+        inflation=inflation,
     )
 
 
