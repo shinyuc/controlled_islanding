@@ -52,7 +52,8 @@ def evaluate(A, problem):
     components, _, reconnected = decode_reconnection(A, problem.topology)
 
     f1 = f1_unstable_nodes(unstable, problem.cost_data)
-    f2 = f2_unstable_edges(unstable, problem.topology, problem.cost_data)
+    # f2 = f2_unstable_edges(unstable, problem.topology, problem.cost_data)
+    f2 = 0.0  # F2 temporarily muted — restore the line above to re-enable
     f3 = f3_operation_edges(
         stable, unstable, problem.topology, problem.cost_data, problem.config
     )

@@ -90,7 +90,9 @@ def test_evaluate_matches_worked_example_with_zero_samples():
 
     result = evaluate(tree, problem)
 
-    assert result == pytest.approx(40.2)
+    # F2 is temporarily muted in evaluate() (islanding/evaluate.py), so the
+    # worked example's F2=7 no longer contributes: 40.2 - 7 = 33.2.
+    assert result == pytest.approx(33.2)
 
 
 def test_evaluate_penalty_terms_raise_total_above_worked_example():
@@ -125,7 +127,9 @@ def test_evaluate_penalty_terms_raise_total_above_worked_example():
 
     result = evaluate(tree, problem)
 
-    assert result > 40.2
+    # F2 is temporarily muted in evaluate() (islanding/evaluate.py), so the
+    # comparison baseline drops by the worked example's F2=7: 40.2 - 7 = 33.2.
+    assert result > 33.2
 
 
 def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
@@ -198,4 +202,8 @@ def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
     assert unstable == [frozenset({8, 9})]
     assert reconnected == set()
 
-    assert result == pytest.approx(F(f1, f2, f3, f4))
+    # F2 is temporarily muted in evaluate() (islanding/evaluate.py), so its
+    # internal f2 contribution is 0 even though f2_unstable_edges (called
+    # above, unmuted) computes a nonzero value here. Pass 0.0 in its place
+    # to match; restore `f2` once evaluate() re-enables the real term.
+    assert result == pytest.approx(F(f1, 0.0, f3, f4))
