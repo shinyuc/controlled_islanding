@@ -10,7 +10,7 @@ from islanding.topology import Topology
 from islanding.augmented import SOURCE, SINK
 from islanding.cost import CostData, AlgorithmConfig, linear_consensus_model
 from islanding.evaluate import Problem
-from islanding.counterexample import find_counterexamples
+from islanding.counterexample import find_counterexamples, linear_counterexample
 
 
 def _fixture():
@@ -106,3 +106,39 @@ def test_a1_yields_no_witnesses():
 
     assert island_witnesses == []
     assert component_witnesses == []
+
+
+def test_linear_counterexample_d1_unit_1_alone():
+    # Spec section 7, assertion 3. Unit ({1}, {}): M=[-1], eigenvalue
+    # -1<=0 -> one witness. node_order=[1,2], d=1, threshold_radius=sqrt(2).
+    find = linear_counterexample({1: -1.0, 2: 3.0}, {(1, 2): 3.0})
+
+    witnesses = find(unit_nodes=[1], unit_edges=[], node_order=[1, 2], d=1,
+                      threshold_radius=2.0 ** 0.5)
+
+    assert len(witnesses) == 1
+    witness = witnesses[0]
+    assert witness.shape == (2, 1)
+    assert abs(witness[0, 0]) == pytest.approx(2.0 ** 0.5)
+    assert witness[1, 0] == pytest.approx(0.0)
+
+
+def test_linear_counterexample_d2_unit_1_alone():
+    # Spec section 7, assertion 4. Same unit and node_order, d=2 -> still
+    # exactly ONE witness (one per non-positive eigenvalue, independent of
+    # d), with the node-1 entry in coordinate 0 only and Frobenius norm
+    # sqrt(2).
+    find = linear_counterexample({1: -1.0, 2: 3.0}, {(1, 2): 3.0})
+
+    witnesses = find(unit_nodes=[1], unit_edges=[], node_order=[1, 2], d=2,
+                      threshold_radius=2.0 ** 0.5)
+
+    assert len(witnesses) == 1
+    witness = witnesses[0]
+    assert witness.shape == (2, 2)
+
+    assert abs(witness[0, 0]) == pytest.approx(2.0 ** 0.5)
+    assert witness[0, 1] == pytest.approx(0.0)
+    assert witness[1, 0] == pytest.approx(0.0)
+    assert witness[1, 1] == pytest.approx(0.0)
+    assert np.linalg.norm(witness) == pytest.approx(2.0 ** 0.5)

@@ -23,6 +23,12 @@ class Problem:
     samples_1: object  # for F5, drawn from {W <= (1+inflation)*beta} with P_1 points
     samples_2: object  # for F6, drawn from {W <= (1+inflation)*gamma} with P_2 points
 
+    def __post_init__(self):
+        assert self.samples_1.shape[1:] == self.samples_2.shape[1:], (
+            "samples_1 and samples_2 must agree on (n, d); "
+            f"got {self.samples_1.shape[1:]} vs {self.samples_2.shape[1:]}"
+        )
+
 
 def draw_samples(topology, model, config, n, d):
     """Draw both fixed sample sets, applying the model's inflation factor.

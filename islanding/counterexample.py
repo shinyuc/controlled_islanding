@@ -23,15 +23,18 @@ def _canon(edge):
 def linear_counterexample(node_weights, edge_weights):
     """SystemModel.counterexample for grounded linear consensus.
 
-    M_u = D_u + L_u over a unit's node/edge set; every eigenvalue <= 0
-    (M_u symmetric since w_ij = w_ji) is a genuine instability -- its
-    eigenvector, zero-padded to node_order and scaled to
-    ||x|| == threshold_radius, is a witness.
+    M_u = D_u + L_u over a unit's node/edge set (size |V_u|, independent
+    of d); every eigenvalue <= 0 (M_u symmetric since w_ij = w_ji) is a
+    genuine instability. Because the dynamics decouple per coordinate
+    (dot_x = -(M_u kron I_d) x), M_u's eigenvalues repeat d times but
+    never change, so the stability criterion -- and the count of
+    witnesses, one per non-positive eigenvalue -- is independent of d.
+    Each witness places its eigenvector, zero-padded to node_order, into
+    coordinate 0 of an (n, d) array (all other coordinates zero) and
+    scales the whole array so its Frobenius norm equals threshold_radius.
     """
 
     def _find(unit_nodes, unit_edges, node_order, d, threshold_radius):
-        assert d == 1, "general d is deferred; the linear method supports d=1 only"
-
         unit_nodes = list(unit_nodes)
         index = {node: i for i, node in enumerate(unit_nodes)}
         size = len(unit_nodes)
@@ -58,12 +61,12 @@ def linear_counterexample(node_weights, edge_weights):
             if lam > 0:
                 continue
 
-            padded = np.zeros(n)
+            padded = np.zeros((n, d))
             for node in unit_nodes:
-                padded[node_position[node]] = eigenvectors[index[node], k]
+                padded[node_position[node], 0] = eigenvectors[index[node], k]
 
             padded *= threshold_radius / np.linalg.norm(padded)
-            witnesses.append(padded.reshape(n, d))
+            witnesses.append(padded)
 
         return witnesses
 
@@ -83,6 +86,7 @@ def find_counterexamples(A, problem):
 
     node_order = sorted(topology.nodes())
     factor = 1.0 + model.inflation(topology)
+    d = problem.samples_1.shape[2]
 
     stable_islands, _ = decode_islanding(A, topology)
     components, _, _ = decode_reconnection(A, topology)
@@ -98,14 +102,14 @@ def find_counterexamples(A, problem):
             if u in island and v in island
         }
         island_witnesses.extend(
-            model.counterexample(island, island_edges, node_order, 1, island_radius)
+            model.counterexample(island, island_edges, node_order, d, island_radius)
         )
 
     component_witnesses = []
     for component in components:
         component_witnesses.extend(
             model.counterexample(
-                component.nodes(), component.edges(), node_order, 1, component_radius
+                component.nodes(), component.edges(), node_order, d, component_radius
             )
         )
 
