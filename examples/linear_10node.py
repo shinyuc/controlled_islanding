@@ -34,6 +34,10 @@ EDGES = [
 
 FAULTY_WEIGHTS = {(1, 2): -3.0, (7, 10): -3.0}
 
+HEALTHY_WEIGHT = 1.0
+
+NODE_WEIGHTS = {i: HEALTHY_WEIGHT for i in NODES}
+
 
 def _canon(edge):
     i, j = edge
@@ -45,11 +49,10 @@ def build_topology():
 
 
 def build_model():
-    node_weights = {i: 1.0 for i in NODES}
     edge_weights = {
-        _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), 1.0) for edge in EDGES
+        _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), HEALTHY_WEIGHT) for edge in EDGES
     }
-    return linear_consensus_model(node_weights, edge_weights)
+    return linear_consensus_model(NODE_WEIGHTS, edge_weights)
 
 
 def build_cost_data():
