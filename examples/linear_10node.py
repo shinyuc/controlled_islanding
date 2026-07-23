@@ -34,9 +34,10 @@ EDGES = [
 
 FAULTY_WEIGHTS = {(1, 2): -3.0, (7, 10): -3.0}
 
-HEALTHY_WEIGHT = 1.0
+HEALTHY_NODE_WEIGHT = 1.0  # grounding strength w_i
+HEALTHY_EDGE_WEIGHT = 1.0  # coupling strength w_ij for non-faulty edges
 
-NODE_WEIGHTS = {i: HEALTHY_WEIGHT for i in NODES}
+NODE_WEIGHTS = {i: HEALTHY_NODE_WEIGHT for i in NODES}
 
 
 def _canon(edge):
@@ -50,7 +51,7 @@ def build_topology():
 
 def build_model():
     edge_weights = {
-        _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), HEALTHY_WEIGHT) for edge in EDGES
+        _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), HEALTHY_EDGE_WEIGHT) for edge in EDGES
     }
     return linear_consensus_model(NODE_WEIGHTS, edge_weights)
 

@@ -5,7 +5,7 @@ call solve() -- they check the setup, not the optimizer.
 import numpy as np
 
 from examples.linear_10node import (
-    NODES, EDGES, FAULTY_WEIGHTS, NODE_WEIGHTS, HEALTHY_WEIGHT,
+    NODES, EDGES, FAULTY_WEIGHTS, NODE_WEIGHTS, HEALTHY_EDGE_WEIGHT,
     build_topology, build_model, build_config, build_problem,
 )
 
@@ -17,7 +17,7 @@ def _canon(edge):
 
 def _build_M(nodes, edges):
     edge_weights = {
-        _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), HEALTHY_WEIGHT) for edge in EDGES
+        _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), HEALTHY_EDGE_WEIGHT) for edge in EDGES
     }
 
     nodes = list(nodes)
