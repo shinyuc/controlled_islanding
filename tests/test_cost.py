@@ -253,6 +253,52 @@ def test_f6_zero_state_gives_zero():
     assert f6 == 0
 
 
+def test_d2_states_match_d1_case_for_f5_and_f6():
+    # 2-node fixture (w_1=-1, w_2=3, w_12=3, k_1=k_2=0.2), same as
+    # test_local_search.py / test_counterexample.py, but with d=2 states:
+    # node 1 = [1, 0], node 2 = [0, 0]. Since the dynamics decouple per
+    # coordinate and only coordinate 0 is nonzero, every term reduces to
+    # exactly the d=1 case:
+    #   island {1} alone: dyn=[1,0], grad_W_r=[1,0], dot=1, W_r=0.5,
+    #     bracket = 1 + 0.2*0.5 = 1.1 -> f5 = 1.1
+    #   merged {1,2}: dyn_1=[-2,0], dyn_2=[3,0], grad_W_r_1=[1,0],
+    #     grad_W_r_2=[0,0], dot sum = -2, W_r=0.5,
+    #     bracket = -2 + 0.2*0.5 = -1.9 < 0 -> f5 = 0
+    # k_1 == k_2 == 0.2 here, so the F6 side (components mirroring the
+    # same node/edge sets) reproduces the identical numbers.
+    topology = Topology(nodes=[1, 2], edges=[(1, 2)])
+
+    node_weights = {1: -1.0, 2: 3.0}
+    edge_weights = {(1, 2): 3.0}
+    model = linear_consensus_model(node_weights, edge_weights)
+
+    config = AlgorithmConfig(
+        kappa_op=1.0, kappa_rec=0.7,
+        alpha_1=1.0, beta=1.0, k_1=0.2, P_1=1,
+        alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
+    )
+
+    samples = np.zeros((1, 2, 2))
+    samples[0, 0] = [1.0, 0.0]  # node 1
+    samples[0, 1] = [0.0, 0.0]  # node 2
+
+    f5_alone = f5_stability_penalty([frozenset({1})], topology, model, samples, config)
+    assert f5_alone == pytest.approx(1.1)
+
+    f5_merged = f5_stability_penalty([frozenset({1, 2})], topology, model, samples, config)
+    assert f5_merged == pytest.approx(0.0)
+
+    component_1 = nx.Graph()
+    component_1.add_node(1)
+    f6_alone = f6_reconnection_stability([component_1], topology, model, samples, config)
+    assert f6_alone == pytest.approx(1.1)
+
+    component_12 = nx.Graph()
+    component_12.add_edges_from([(1, 2)])
+    f6_merged = f6_reconnection_stability([component_12], topology, model, samples, config)
+    assert f6_merged == pytest.approx(0.0)
+
+
 def test_f6_merged_component_excludes_cut_edge_3_5():
     merged_component = _merged_components()[0]
     edge_set = {frozenset(e) for e in merged_component.edges()}
