@@ -37,12 +37,17 @@ FAULTY_WEIGHTS = {(1, 2): -3.0, (7, 10): -3.0}
 HEALTHY_NODE_WEIGHT = 1.0  # grounding strength w_i
 HEALTHY_EDGE_WEIGHT = 1.0  # coupling strength w_ij for non-faulty edges
 
-NODE_WEIGHTS = {i: HEALTHY_NODE_WEIGHT for i in NODES}
-
 
 def _canon(edge):
     i, j = edge
     return (i, j) if i < j else (j, i)
+
+
+NODE_WEIGHTS = {i: HEALTHY_NODE_WEIGHT for i in NODES}
+
+EDGE_WEIGHTS = {
+    _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), HEALTHY_EDGE_WEIGHT) for edge in EDGES
+}
 
 
 def build_topology():
@@ -50,10 +55,32 @@ def build_topology():
 
 
 def build_model():
-    edge_weights = {
-        _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), HEALTHY_EDGE_WEIGHT) for edge in EDGES
-    }
-    return linear_consensus_model(NODE_WEIGHTS, edge_weights)
+    return linear_consensus_model(NODE_WEIGHTS, EDGE_WEIGHTS)
+
+
+def build_M(nodes, edges):
+    """Build M = D + L for a unit, using this example's NODE_WEIGHTS and
+    EDGE_WEIGHTS. `nodes` is the unit's node set, `edges` its edge set --
+    for a reconnected component, pass component.edges() (the E_s^rec set),
+    not an induced subgraph.
+    """
+    nodes = list(nodes)
+    index = {node: i for i, node in enumerate(nodes)}
+    size = len(nodes)
+
+    M = np.zeros((size, size))
+    for node in nodes:
+        M[index[node], index[node]] += NODE_WEIGHTS[node]
+
+    for u, v in edges:
+        w = EDGE_WEIGHTS[_canon((u, v))]
+        i, j = index[u], index[v]
+        M[i, j] -= w
+        M[j, i] -= w
+        M[i, i] += w
+        M[j, j] += w
+
+    return M
 
 
 def build_cost_data():

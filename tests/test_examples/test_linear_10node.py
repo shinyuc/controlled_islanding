@@ -5,7 +5,7 @@ call solve() -- they check the setup, not the optimizer.
 import numpy as np
 
 from examples.linear_10node import (
-    NODES, EDGES, FAULTY_WEIGHTS, NODE_WEIGHTS, HEALTHY_EDGE_WEIGHT,
+    NODES, EDGES, build_M,
     build_topology, build_model, build_config, build_problem,
 )
 
@@ -13,30 +13,6 @@ from examples.linear_10node import (
 def _canon(edge):
     i, j = edge
     return (i, j) if i < j else (j, i)
-
-
-def _build_M(nodes, edges):
-    edge_weights = {
-        _canon(edge): FAULTY_WEIGHTS.get(_canon(edge), HEALTHY_EDGE_WEIGHT) for edge in EDGES
-    }
-
-    nodes = list(nodes)
-    index = {node: i for i, node in enumerate(nodes)}
-    size = len(nodes)
-
-    M = np.zeros((size, size))
-    for node in nodes:
-        M[index[node], index[node]] += NODE_WEIGHTS[node]
-
-    for u, v in edges:
-        w = edge_weights[_canon((u, v))]
-        i, j = index[u], index[v]
-        M[i, j] -= w
-        M[j, i] -= w
-        M[i, i] += w
-        M[j, j] += w
-
-    return M
 
 
 def test_topology_has_10_nodes_17_edges_and_matching_degree_sequence():
@@ -53,7 +29,7 @@ def test_topology_has_10_nodes_17_edges_and_matching_degree_sequence():
 def test_full_system_is_genuinely_unstable():
     # M over all 10 nodes and all 17 edges. If this were positive
     # definite, the whole problem would be vacuous -- nothing to island.
-    M = _build_M(NODES, EDGES)
+    M = build_M(NODES, EDGES)
     lambda_min = np.linalg.eigvalsh(M).min()
     assert lambda_min <= 0
 
@@ -67,7 +43,7 @@ def test_faulty_edge_makes_its_island_unstable():
         (u, v) for u, v in EDGES if u in unit_nodes and v in unit_nodes
     ]
 
-    M = _build_M(unit_nodes, induced_edges)
+    M = build_M(unit_nodes, induced_edges)
     lambda_min = np.linalg.eigvalsh(M).min()
     assert lambda_min <= 0
 
@@ -82,7 +58,7 @@ def test_cutting_the_faulty_edge_fixes_the_island():
         if u in unit_nodes and v in unit_nodes and _canon((u, v)) != (1, 2)
     ]
 
-    M = _build_M(unit_nodes, induced_edges)
+    M = build_M(unit_nodes, induced_edges)
     lambda_min = np.linalg.eigvalsh(M).min()
     assert lambda_min > 0
 
