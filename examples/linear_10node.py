@@ -16,6 +16,10 @@ exceed edge costs (1), so cutting is cheaper than shedding, matching the
 fault model. Adding a new fault structure means adding another `Setup`
 instance, not another file.
 
+`NODE_AND_EDGE_FAULTS` adds a genuinely unrescuable faulty node (10) on
+top of the same two faulty edges -- see its definition below for why no
+island containing node 10 can be stable, regardless of partition.
+
 10 nodes, 17 edges, d=2 per-node state (the two coordinates decouple
 since all weights are scalars, so stability is governed by the same
 d=1 criterion; see docs/counterexample_spec.md section 5). See
@@ -65,6 +69,22 @@ _HEALTHY_EDGE_WEIGHT = 1.0  # coupling strength w_ij for non-faulty edges
 EDGE_FAULTS = Setup(
     name="edge_faults",
     node_weights={i: _HEALTHY_NODE_WEIGHT for i in NODES},
+    edge_weights={
+        _canon(edge): _FAULTY_WEIGHTS.get(_canon(edge), _HEALTHY_EDGE_WEIGHT)
+        for edge in EDGES
+    },
+    node_costs={i: 2.0 for i in NODES},
+    edge_costs={_canon(edge): 1.0 for edge in EDGES},
+)
+
+# NODE_AND_EDGE_FAULTS: same two faulty edges as EDGE_FAULTS, plus node 10
+# is itself faulty (w_10 = -5.0). Node 10's neighbours are 6, 7, 9 with
+# couplings 1.0, -3.0, 1.0 (summing to -1.0), so even at full coupling its
+# diagonal is w_10 + sum(couplings) = -5.0 + (-1.0) = -6.0 < 0 -- no
+# partition can rescue it, so it must be shed into an unstable island.
+NODE_AND_EDGE_FAULTS = Setup(
+    name="node_and_edge_faults",
+    node_weights={**{i: _HEALTHY_NODE_WEIGHT for i in NODES}, 10: -5.0},
     edge_weights={
         _canon(edge): _FAULTY_WEIGHTS.get(_canon(edge), _HEALTHY_EDGE_WEIGHT)
         for edge in EDGES
