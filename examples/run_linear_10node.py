@@ -14,7 +14,7 @@ import time
 
 import numpy as np
 
-from examples.linear_10node import build_problem, build_M
+from examples.linear_10node import EDGE_FAULTS, build_problem, build_M
 from islanding.outer_loop import solve
 from islanding.search import decode_islanding, decode_reconnection
 from islanding.counterexample import find_counterexamples
@@ -23,9 +23,11 @@ from islanding.cost import (
     f4_reconnection, f5_stability_penalty, f6_reconnection_stability, F,
 )
 
+SETUP = EDGE_FAULTS
+
 
 def _lambda_min(nodes, edges):
-    M = build_M(nodes, edges)
+    M = build_M(nodes, edges, SETUP.node_weights, SETUP.edge_weights)
     return float(np.linalg.eigvalsh(M).min())
 
 
@@ -34,7 +36,7 @@ def _induced_edges(topology, nodes):
 
 
 def main():
-    problem = build_problem(seed=0)
+    problem = build_problem(SETUP, seed=0)
     topology = problem.topology
     config = problem.config
 
