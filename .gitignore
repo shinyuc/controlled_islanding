@@ -20,6 +20,10 @@ results/
 paper/
 docs/
 
+# IEEE test-case source data and parsers (keep local, commit only derived topology)
+examples/ieee_30_bus/*.txt
+examples/ieee_30_bus/parse_*.py
+
 # OS / editor
 .DS_Store
 .ipynb_checkpoints/
