@@ -1,20 +1,33 @@
 """Diagnostic run script for the 10-node linear consensus example.
 
 Not a test -- makes no assertions, because the answer isn't known in
-advance. Run manually: `python examples/run_linear_10node.py`. Compare
-the printed report against the prediction in
+advance. Compare the printed report against the prediction in
 docs/example_linear_10node_spec.md section 8. See
 docs/run_linear_10_node_spec.md for the report format this follows.
 
 Nothing is saved to disk yet -- deferred until the runtime (printed in
 the "Solve" section) tells us whether that's actually needed.
+
+How to run
+----------
+From the repo root, with the venv active:
+
+    python -m examples.run_linear_10node
+
+Use the `-m` form, not `python examples/run_linear_10node.py` -- that
+puts the repo root on sys.path so `examples.linear_10node` resolves.
+
+This script currently runs the EDGE_FAULTS setup (see SETUP below).
+examples/linear_10node.py also defines NODE_AND_EDGE_FAULTS; to run that
+scenario instead, change the setup passed to build_problem() in main()
+below (and update SETUP, which _lambda_min() also relies on).
 """
 
 import time
 
 import numpy as np
 
-from examples.linear_10node import EDGE_FAULTS, build_problem, build_M
+from examples.linear_10node import EDGE_FAULTS, NODE_AND_EDGE_FAULTS,build_problem, build_M
 from islanding.outer_loop import solve
 from islanding.search import decode_islanding, decode_reconnection
 from islanding.counterexample import find_counterexamples
@@ -23,7 +36,8 @@ from islanding.cost import (
     f4_reconnection, f5_stability_penalty, f6_reconnection_stability, F,
 )
 
-SETUP = EDGE_FAULTS
+# SETUP = EDGE_FAULTS
+SETUP = NODE_AND_EDGE_FAULTS
 
 
 def _lambda_min(nodes, edges):

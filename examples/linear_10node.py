@@ -84,7 +84,7 @@ EDGE_FAULTS = Setup(
 # partition can rescue it, so it must be shed into an unstable island.
 NODE_AND_EDGE_FAULTS = Setup(
     name="node_and_edge_faults",
-    node_weights={**{i: _HEALTHY_NODE_WEIGHT for i in NODES}, 10: -5.0},
+    node_weights={**{i: _HEALTHY_NODE_WEIGHT for i in NODES}, 10: -20.0},
     edge_weights={
         _canon(edge): _FAULTY_WEIGHTS.get(_canon(edge), _HEALTHY_EDGE_WEIGHT)
         for edge in EDGES
