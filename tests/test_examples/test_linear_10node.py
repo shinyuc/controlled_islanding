@@ -64,7 +64,7 @@ def test_cutting_the_faulty_edge_fixes_the_island():
 
 
 def test_build_problem_draws_matching_sample_shapes():
-    problem = build_problem(EDGE_FAULTS, seed=0)
+    problem = build_problem(EDGE_FAULTS, build_topology(), seed=0)
 
     assert problem.samples_1.shape == (20, 10, 2)
     assert problem.samples_2.shape == (20, 10, 2)

@@ -27,7 +27,9 @@ import time
 
 import numpy as np
 
-from examples.linear_10node import EDGE_FAULTS, NODE_AND_EDGE_FAULTS,build_problem, build_M
+from examples.linear_10node import (
+    EDGE_FAULTS, NODE_AND_EDGE_FAULTS, build_topology, build_problem, build_M,
+)
 from islanding.outer_loop import solve
 from islanding.search import decode_islanding, decode_reconnection
 from islanding.counterexample import find_counterexamples
@@ -50,7 +52,7 @@ def _induced_edges(topology, nodes):
 
 
 def main():
-    problem = build_problem(SETUP, seed=0)
+    problem = build_problem(SETUP, build_topology(), seed=0)
     topology = problem.topology
     config = problem.config
 
