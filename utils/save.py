@@ -7,17 +7,29 @@ utils, to keep the core algorithm free of I/O/reporting concerns.
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 
 from islanding.cost import canon
 from islanding.search import decode_islanding, decode_reconnection
 
+# utils/save.py -> utils/ -> repo root.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
-def save_result(result, problem, example_name, results_dir="results"):
+
+def save_result(result, problem, example_name, results_dir=None):
     """Decode the solved tree and write a JSON summary to
-    results/<example_name>_<timestamp>.json. Creates results_dir if missing.
+    <results_dir>/<example_name>_<timestamp>.json. Creates results_dir if
+    missing.
+
+    results_dir defaults to <repo_root>/results, anchored to this file's
+    location rather than the current working directory, so results always
+    land inside the project regardless of where the script is launched
+    from. Pass an explicit results_dir to override.
 
     Returns the path written.
     """
+    if results_dir is None:
+        results_dir = REPO_ROOT / "results"
     os.makedirs(results_dir, exist_ok=True)
 
     topology = problem.topology
