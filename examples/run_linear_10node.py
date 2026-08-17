@@ -109,7 +109,7 @@ def main():
     f4 = f4_reconnection(reconnected, problem.cost_data, config)
     f5 = f5_stability_penalty(stable, topology, problem.model, problem.samples_1, config)
     f6 = f6_reconnection_stability(
-        components, topology, problem.model, problem.samples_2, config
+        stable, reconnected, topology, problem.model, problem.samples_2, config
     )
     print(f"F1 (unstable nodes):      {f1}")
     print(f"F2 (unstable edges):      {f2}  -- MUTED to 0.0 inside evaluate() "
@@ -117,7 +117,7 @@ def main():
     print(f"F3 (operation/cut edges): {f3}")
     print(f"F4 (reconnection reward): {f4}")
     print(f"F5 (island stability):    {f5}")
-    print(f"F6 (component stability): {f6}")
+    print(f"F6 (reconnection stab.):  {f6}")
     total = F(f1, 0.0, f3, f4, f5, f6)
     print(f"Total F (F2 muted):       {total}")
     print()
@@ -144,7 +144,8 @@ def main():
         if lam < k2_half:
             print(
                 f"  FLAG: component {nodes} lambda_min={lam:.4f} < k_2/2={k2_half:.4f} "
-                "-- passes the counterexample check but still contributes to F6"
+                "-- passes the counterexample check (which is still "
+                "component-based; revised F6 is per-island)"
             )
 
 

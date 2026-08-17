@@ -138,8 +138,9 @@ def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
     # 0.5) and one unstable island {8,9}; no cross edges at all, so no cut
     # edges and no reconnection. This isolates F5/F6 from F1..F4: with real
     # seeded samples (not hand-picked or all-zero), F5 and F6 must both be
-    # exactly 0 for ANY draw, since bracket <= 0 on every stable island
-    # regardless of state.
+    # exactly 0 for ANY draw. F5 because its bracket is <= 0 on every stable
+    # island regardless of state; F6 because E^rec is empty (Parts 1-3
+    # vanish) and k_1 == k_2 here (Part 4 vanishes too), so Psi_r == 0.
     topology = Topology(
         nodes=[4, 5, 6, 7, 8, 9],
         edges=[(4, 5), (6, 7), (8, 9)],
@@ -184,7 +185,7 @@ def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
     # Compute the F1..F4 baseline independently, via the same decode calls
     # evaluate() itself makes, to avoid a hand-derived "magic number".
     stable, unstable = decode_islanding(tree, topology)
-    components, _, reconnected = decode_reconnection(tree, topology)
+    _, _, reconnected = decode_reconnection(tree, topology)
     f1 = f1_unstable_nodes(unstable, cost_data)
     f2 = f2_unstable_edges(unstable, topology, cost_data)
     f3 = f3_operation_edges(stable, unstable, topology, cost_data, config)
@@ -194,7 +195,9 @@ def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
     # against F(f1, f2, f3, f4) would still pass if f5/f6 were broken and
     # always returned 0, so check the terms themselves too.
     f5 = f5_stability_penalty(stable, topology, model, samples_1, config)
-    f6 = f6_reconnection_stability(components, topology, model, samples_2, config)
+    f6 = f6_reconnection_stability(
+        stable, reconnected, topology, model, samples_2, config
+    )
     assert f5 == 0
     assert f6 == 0
 

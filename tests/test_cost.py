@@ -5,7 +5,6 @@ and the F5 fixture in section 13.
 
 from dataclasses import replace
 
-import networkx as nx
 import numpy as np
 import pytest
 
@@ -50,6 +49,15 @@ def test_canon_sorts_endpoints():
 def test_algorithm_config_requires_kappa_op_greater_than_kappa_rec():
     with pytest.raises(AssertionError):
         AlgorithmConfig(kappa_op=0.5, kappa_rec=0.7)
+
+
+def test_algorithm_config_requires_k1_at_least_k2():
+    with pytest.raises(AssertionError):
+        AlgorithmConfig(kappa_op=1.0, kappa_rec=0.7, k_1=0.2, k_2=1.0)
+
+    # k_1 == k_2 is allowed -- the constraint is >=, not strict.
+    config = AlgorithmConfig(kappa_op=1.0, kappa_rec=0.7, k_1=0.5, k_2=0.5)
+    assert config.k_1 == config.k_2
 
 
 def test_worked_example_terms_and_combined_cost():
@@ -148,14 +156,19 @@ def test_f5_zero_state_gives_zero_even_with_faulty_island():
     assert f5 == 0
 
 
-def _f6_topology_model_and_config():
-    # Same nodes/weights as the F5 fixture, plus reconnected edge (1,4),
-    # w_14 = 5. topology carries the full 7-node system so
-    # f6_reconnection_stability's node ordering matches how samples were
-    # generated (sorted(topology.nodes())), same convention as F5.
+def _f6_fixture():
+    # Spec section 16's traced fixture. Same nodes/weights as the F5
+    # fixture, plus the reconnected edge (1,4) with w_14 = 5. (1,4) is an
+    # original edge that was cut by the islanding and then restored, so it
+    # belongs in the topology; being cross-island, _induced_edges excludes
+    # it from every E_r, and it reaches F6 only via E^rec.
+    #
+    # topology carries the full 7-node system so f6_reconnection_stability's
+    # node ordering matches how samples were generated
+    # (sorted(topology.nodes())), same convention as F5.
     topology = Topology(
         nodes=[1, 2, 3, 4, 5, 6, 7],
-        edges=[(1, 2), (1, 3), (2, 3), (4, 5), (6, 7)],
+        edges=[(1, 2), (1, 3), (2, 3), (4, 5), (6, 7), (1, 4)],
     )
 
     node_weights = {1: -1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1}
@@ -164,96 +177,143 @@ def _f6_topology_model_and_config():
     }
     model = linear_consensus_model(node_weights, edge_weights)
 
+    # k_1 = 1 > k_2 = 0.2, so Part 4 is nonzero (factor -(k_1 - k_2) = -0.8).
     config = AlgorithmConfig(
-        kappa_op=1.0, kappa_rec=0.7, alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
+        kappa_op=1.0, kappa_rec=0.7,
+        alpha_1=1.0, beta=1.0, k_1=1.0, P_1=1,
+        alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
     )
-    return topology, model, config
+
+    stable_islands = [frozenset({1, 2, 3}), frozenset({4, 5}), frozenset({6, 7})]
+    reconnected_edges = {(1, 4)}
+
+    return topology, model, config, stable_islands, reconnected_edges
 
 
-def _f6_eigenvector_aligned_samples():
-    # Same eigenvector-aligned state as the F5 fixture: (2,1,1) normalized,
-    # in the kernel of L_{1,2,3} = [[1,-1,-1],[-1,3,-1],[-1,-1,3]]. With
-    # k_2=0.2, bracket at this direction for the UNMERGED island {1,2,3} is
-    # k_2/2 - 0 = 0.1 > 0 (hand-verified via numpy.linalg.eigvalsh).
-    # Nodes 4-7 are left at 0 -- irrelevant, since both the merged component
-    # {1,2,3,4,5} (eigenvalues [0.459, 1.866, 3, 4, 11.675], all >= k_2/2 =
-    # 0.1) and the standalone islands {4,5}, {6,7} (eigenvalues {1,3} each)
-    # have bracket <= 0 for ANY state, hand-verified the same way.
-    samples = np.zeros((1, 7, 1))
-    samples[0, 0, 0] = 0.81649658  # node 1
-    samples[0, 1, 0] = 0.40824829  # node 2
-    samples[0, 2, 0] = 0.40824829  # node 3
+def _f6_traced_samples():
+    # Spec section 16's sample state: x_1 = 0.5, all others 0.25.
+    # Deliberately non-uniform -- with every node equal, all
+    # f_ij = -w_ij(x_i - x_j) vanish and Part 1 would be zero, leaving only
+    # the trivial Part 4. W(x) = 0.5*(0.25 + 6*0.0625) = 0.3125 <= gamma = 1.
+    samples = np.full((1, 7, 1), 0.25)
+    samples[0, 0, 0] = 0.5  # node 1
     return samples
 
 
-def _merged_components():
-    # {1,2,3,4,5}: islands {1,2,3} and {4,5} merged via reconnected edge
-    # (1,4). Edge set is (1,2),(2,3),(1,3),(4,5),(1,4) -- NOT (3,5), which
-    # is a cut edge whose endpoints land in the same component but was
-    # never reconnected.
-    merged = nx.Graph()
-    merged.add_edges_from([(1, 2), (2, 3), (1, 3), (4, 5), (1, 4)])
+def test_f6_traced_example():
+    # Hand-traced ground truth from spec section 16. On linear consensus
+    # W_ij = 0, so Parts 2 and 3 vanish identically and this covers Parts 1
+    # and 4 only (a model with nonzero W_ij is deferred).
+    #
+    #   island {1,2,3}: Psi = (0.5 * -1.25) - 0.8*0.1875 = -0.775 -> 0
+    #   island {4,5}:   Psi = (0.25 * 1.25) - 0.8*0.0625 = +0.2625 -> 0.2625
+    #   island {6,7}:   Psi = Part4 only = -0.8*0.0625 = -0.05 -> 0
+    #
+    # The two endpoints of (1,4) give opposite-signed Part 1 contributions
+    # (-0.625 at node 1, +0.3125 at node 4), so a sign error in the gradient
+    # or the dynamics surfaces instead of cancelling.
+    #
+    # This also pins the hinge ORDER: hinging per island gives 0.2625, while
+    # summing Psi_r first would give max(-0.5625, 0) = 0.
+    topology, model, config, stable_islands, reconnected_edges = _f6_fixture()
+    samples = _f6_traced_samples()
 
-    # {6,7}: stands alone.
-    standalone = nx.Graph()
-    standalone.add_edges_from([(6, 7)])
+    f6 = f6_reconnection_stability(
+        stable_islands, reconnected_edges, topology, model, samples, config
+    )
 
-    return [merged, standalone]
-
-
-def _unmerged_components():
-    # No reconnection: each stable island is its own component.
-    island_123 = nx.Graph()
-    island_123.add_edges_from([(1, 2), (2, 3), (1, 3)])
-
-    island_45 = nx.Graph()
-    island_45.add_edges_from([(4, 5)])
-
-    island_67 = nx.Graph()
-    island_67.add_edges_from([(6, 7)])
-
-    return [island_123, island_45, island_67]
+    assert f6 == pytest.approx(0.2625)
 
 
-def test_f6_reconnection_rescues_failing_island():
-    # Component {1,2,3,4,5} has lambda_min = 0.459 >= k_2/2 = 0.1, and
-    # {6,7} has lambda_min = 1 >= 0.1, so bracket <= 0 for ANY state -- this
-    # holds for any draw, so use real samples from the model's sampler
-    # (fixed seed for reproducibility) rather than a hand-picked state.
-    topology, model, config = _f6_topology_model_and_config()
+def test_f6_zero_state_gives_zero():
+    topology, model, config, stable_islands, reconnected_edges = _f6_fixture()
+    samples = np.zeros((1, 7, 1))
+
+    f6 = f6_reconnection_stability(
+        stable_islands, reconnected_edges, topology, model, samples, config
+    )
+
+    assert f6 == 0
+
+
+def test_f6_no_reconnection_gives_zero_for_any_state():
+    # E^rec empty -> Parts 1-3 vanish for every island, leaving
+    # Psi_r = -(k_1 - k_2) W_r <= 0 whenever k_1 >= k_2 (guaranteed by
+    # AlgorithmConfig). Draw-independent, so this uses real seeded samples
+    # rather than a hand-picked state.
+    topology, model, config, stable_islands, _ = _f6_fixture()
     config = replace(config, P_2=10)
 
     np.random.seed(0)
     samples = model.sampler(config.gamma, config.P_2, 7, 1)
 
-    components = _merged_components()
-
-    f6 = f6_reconnection_stability(components, topology, model, samples, config)
-
-    assert f6 == 0
-
-
-def test_f6_hinge_fires_when_reconnection_absent():
-    topology, model, config = _f6_topology_model_and_config()
-    samples = _f6_eigenvector_aligned_samples()
-    components = _unmerged_components()
-
-    f6 = f6_reconnection_stability(components, topology, model, samples, config)
-
-    assert f6 > 0
-
-
-def test_f6_zero_state_gives_zero():
-    topology, model, config = _f6_topology_model_and_config()
-    samples = np.zeros((1, 7, 1))
-    components = _merged_components()
-
-    f6 = f6_reconnection_stability(components, topology, model, samples, config)
+    f6 = f6_reconnection_stability(
+        stable_islands, set(), topology, model, samples, config
+    )
 
     assert f6 == 0
 
 
-def test_d2_states_match_d1_case_for_f5_and_f6():
+def test_f6_part_4_vanishes_when_k1_equals_k2():
+    # Spec section 16, third additional assertion. With k_1 == k_2 the
+    # island-energy correction drops out and only Part 1 survives:
+    # island {4,5} contributes [0.3125]_+, islands {1,2,3} and {6,7} give
+    # -0.625 and 0, both clipping to zero.
+    topology, model, config, stable_islands, reconnected_edges = _f6_fixture()
+    config = replace(config, k_2=config.k_1)
+    samples = _f6_traced_samples()
+
+    f6 = f6_reconnection_stability(
+        stable_islands, reconnected_edges, topology, model, samples, config
+    )
+
+    assert f6 == pytest.approx(0.3125)
+
+
+def test_f6_ignores_cut_edge_that_was_not_reconnected():
+    # (3,5) joins islands {1,2,3} and {4,5} in the original graph but is not
+    # in E^rec, so it must contribute nothing: _induced_edges leaves it out
+    # of both E_r (cross-island), and N_i^rec is read off E^rec alone. Adding
+    # it to the topology must therefore leave the traced value untouched.
+    # Guards against F6 ever reaching for topology neighbours instead of
+    # E^rec -- the successor to the old component-edge-set check, now
+    # testing the code rather than a hand-built fixture.
+    topology, model, config, stable_islands, reconnected_edges = _f6_fixture()
+    topology_with_cut_edge = Topology(
+        nodes=[1, 2, 3, 4, 5, 6, 7],
+        edges=list(topology.edges()) + [(3, 5)],
+    )
+    samples = _f6_traced_samples()
+
+    f6 = f6_reconnection_stability(
+        stable_islands, reconnected_edges, topology_with_cut_edge, model,
+        samples, config,
+    )
+
+    assert f6 == pytest.approx(0.2625)
+
+
+def test_f6_d2_states_match_d1_traced_example():
+    # Same fixture and states as test_f6_traced_example, but each x_i is a
+    # 2-vector with the traced value in coordinate 0 and zero in coordinate
+    # 1. Linear consensus decouples per coordinate and coordinate 1 is
+    # identically zero, so every part reduces to the d=1 case and F6 must
+    # come out at the same 0.2625. Checks that the dot products reduce to
+    # scalars rather than broadcasting.
+    topology, model, config, stable_islands, reconnected_edges = _f6_fixture()
+
+    samples = np.zeros((1, 7, 2))
+    samples[0, :, 0] = 0.25
+    samples[0, 0, 0] = 0.5  # node 1
+
+    f6 = f6_reconnection_stability(
+        stable_islands, reconnected_edges, topology, model, samples, config
+    )
+
+    assert f6 == pytest.approx(0.2625)
+
+
+def test_d2_states_match_d1_case_for_f5():
     # 2-node fixture (w_1=-1, w_2=3, w_12=3, k_1=k_2=0.2), same as
     # test_local_search.py / test_counterexample.py, but with d=2 states:
     # node 1 = [1, 0], node 2 = [0, 0]. Since the dynamics decouple per
@@ -264,8 +324,9 @@ def test_d2_states_match_d1_case_for_f5_and_f6():
     #   merged {1,2}: dyn_1=[-2,0], dyn_2=[3,0], grad_W_r_1=[1,0],
     #     grad_W_r_2=[0,0], dot sum = -2, W_r=0.5,
     #     bracket = -2 + 0.2*0.5 = -1.9 < 0 -> f5 = 0
-    # k_1 == k_2 == 0.2 here, so the F6 side (components mirroring the
-    # same node/edge sets) reproduces the identical numbers.
+    # F6 no longer shares F5's bracket (Psi_r is a different expression), so
+    # it no longer reproduces these numbers; its d=2 reduction is covered
+    # separately by test_f6_d2_states_match_d1_traced_example.
     topology = Topology(nodes=[1, 2], edges=[(1, 2)])
 
     node_weights = {1: -1.0, 2: 3.0}
@@ -288,65 +349,59 @@ def test_d2_states_match_d1_case_for_f5_and_f6():
     f5_merged = f5_stability_penalty([frozenset({1, 2})], topology, model, samples, config)
     assert f5_merged == pytest.approx(0.0)
 
-    component_1 = nx.Graph()
-    component_1.add_node(1)
-    f6_alone = f6_reconnection_stability([component_1], topology, model, samples, config)
-    assert f6_alone == pytest.approx(1.1)
 
-    component_12 = nx.Graph()
-    component_12.add_edges_from([(1, 2)])
-    f6_merged = f6_reconnection_stability([component_12], topology, model, samples, config)
-    assert f6_merged == pytest.approx(0.0)
-
-
-def test_f6_merged_component_excludes_cut_edge_3_5():
-    merged_component = _merged_components()[0]
-    edge_set = {frozenset(e) for e in merged_component.edges()}
-    assert frozenset({3, 5}) not in edge_set
-
-
-def test_f6_node_indexing_uses_global_not_component_local_order():
-    # Regression test for interleaved node labels: stable nodes {1,2,5,6},
-    # unstable {3,4}. Global order sorted(topology.nodes()) is
-    # [1,2,3,4,5,6] -> node 5 at index 4, node 6 at index 5. The union of
-    # component nodes is only {1,2,5,6} -> a (now-removed) local-index
-    # scheme would put node 5 at index 2, node 6 at index 3 -- silently
-    # reading the unstable nodes' rows instead.
+def test_f6_node_indexing_uses_global_not_island_local_order():
+    # Regression test for interleaved node labels: stable islands {1,2} and
+    # {5,6}, unstable {3,4}, reconnected edge (2,5) with w = 5. Global order
+    # sorted(topology.nodes()) is [1,2,3,4,5,6] -> node 5 at index 4, node 6
+    # at index 5. A local-index scheme over the stable nodes {1,2,5,6} would
+    # put node 5 at index 2 and node 6 at index 3 -- silently reading the
+    # UNSTABLE nodes' rows instead.
     #
-    # samples is built using the CORRECT global convention: nodes 5 and 6
-    # (indices 4, 5) are exactly zero, so both components should see a
-    # zero state and contribute exactly 0. Indices 2 and 3 (nodes 3, 4 --
-    # never touched by any component) are deliberately set to the
-    # eigenvector direction that fires component {5,6}'s hinge (hand-
-    # verified via numpy.linalg.eigh on L_{5,6} = diag(-1,1) +
-    # Laplacian(edge) = [[0,-1],[-1,2]], eigenvalues [-0.414, 2.414];
-    # bracket at that eigenvector with k_2=0.2 is 0.514 > 0). If
-    # f6_reconnection_stability ever again indexed by component-local
-    # order, it would misread node 5 and 6's states from these rows and
-    # report F6 > 0 instead of the correct 0.
+    # samples is built with the CORRECT global convention: x_1 = 0,
+    # x_2 = 0.5, x_5 = x_6 = 0.25. Rows 2 and 3 (nodes 3, 4 -- in no stable
+    # island, so read by nothing) hold large poison values.
+    #
+    # Hand-traced expected value, structurally the section 16 trace with the
+    # islands relabelled (w_i = 1 throughout, w_12 = w_56 = 1, w_25 = 5,
+    # k_1 = 1, k_2 = 0.2):
+    #   island {1,2}: g_2 = 0.5, f_{2,5} = -5(0.5 - 0.25) = -1.25,
+    #     Part1 = -0.625; W_r = 0.5*(0 + 0.25) = 0.125,
+    #     Part4 = -0.8*0.125 = -0.1  ->  Psi = -0.725 -> 0
+    #   island {5,6}: g_5 = 0.25, f_{5,2} = -5(0.25 - 0.5) = +1.25,
+    #     Part1 = +0.3125; W_r = 0.0625, Part4 = -0.05  ->  Psi = 0.2625
+    #   F6 = 0.2625
+    # Under local indexing node 5 would read row 2 (10.0), making island
+    # {1,2}'s Part 1 = 0.5 * -5(0.5 - 10) = +23.75 and the total wildly
+    # different -- the assertion fails in both directions, not just when a
+    # positive penalty appears.
     topology = Topology(
         nodes=[1, 2, 3, 4, 5, 6],
-        edges=[(1, 2), (3, 4), (5, 6)],
+        edges=[(1, 2), (3, 4), (5, 6), (2, 5)],
     )
 
-    node_weights = {1: 1, 2: 1, 3: 1, 4: 1, 5: -1, 6: 1}
-    edge_weights = {(1, 2): 1, (3, 4): 1, (5, 6): 1}
+    node_weights = {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1}
+    edge_weights = {(1, 2): 1, (3, 4): 1, (5, 6): 1, (2, 5): 5}
     model = linear_consensus_model(node_weights, edge_weights)
 
     config = AlgorithmConfig(
-        kappa_op=1.0, kappa_rec=0.7, alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
+        kappa_op=1.0, kappa_rec=0.7,
+        alpha_1=1.0, beta=1.0, k_1=1.0, P_1=1,
+        alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
     )
 
-    component_12 = nx.Graph()
-    component_12.add_edges_from([(1, 2)])
-    component_56 = nx.Graph()
-    component_56.add_edges_from([(5, 6)])
-    components = [component_12, component_56]
+    stable_islands = [frozenset({1, 2}), frozenset({5, 6})]
+    reconnected_edges = {(2, 5)}
 
     samples = np.zeros((1, 6, 1))
-    samples[0, 2, 0] = -0.92387953  # node 3's row -- would-be node 5 under the old bug
-    samples[0, 3, 0] = -0.38268343  # node 4's row -- would-be node 6 under the old bug
+    samples[0, 1, 0] = 0.5    # node 2
+    samples[0, 2, 0] = 10.0   # node 3's row -- would-be node 5 under the old bug
+    samples[0, 3, 0] = -10.0  # node 4's row -- would-be node 6 under the old bug
+    samples[0, 4, 0] = 0.25   # node 5
+    samples[0, 5, 0] = 0.25   # node 6
 
-    f6 = f6_reconnection_stability(components, topology, model, samples, config)
+    f6 = f6_reconnection_stability(
+        stable_islands, reconnected_edges, topology, model, samples, config
+    )
 
-    assert f6 == 0
+    assert f6 == pytest.approx(0.2625)

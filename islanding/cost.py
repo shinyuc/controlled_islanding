@@ -37,6 +37,10 @@ class AlgorithmConfig:
 
     def __post_init__(self):
         assert self.kappa_op > self.kappa_rec
+        # Cross-constraint from the revised F6 theory (spec section 15):
+        # k_1 >= k_2 > 0. Note >=, not strict -- k_1 == k_2 is allowed, and
+        # makes F6's Part 4 vanish.
+        assert self.k_1 >= self.k_2 > 0
         assert self.alpha_1 > 0
         assert self.beta > 0
         assert self.k_1 > 0
@@ -258,19 +262,91 @@ def f5_stability_penalty(stable_islands, topology, model, samples, config):
     return config.alpha_1 / config.P_1 * total
 
 
-def f6_reconnection_stability(components, topology, model, samples, config):
-    """Stability-penalty term F6 (spec section 14).
+def _psi_reconnection(nodes, edges_r, neighbors, rec_neighbors, states, model, config):
+    """Psi_r for one stable island and one sample (spec section 14).
 
-    Evaluated per sample and per reconnected component. Each component is
-    an nx.Graph already carrying exactly V_s^rec and E_s^rec (per
-    decode_reconnection's construction), so component.edges() and
-    component.neighbors(i) are used directly -- no within-unit filtering
-    needed here, unlike F5.
+    Sums the four parts of Psi_r and returns the raw (unhinged) value; the
+    caller applies the per-island hinge.
 
-    topology is used ONLY for node ordering (identical to
-    f5_stability_penalty): node order along the samples' middle axis is
-    `sorted(topology.nodes())`, matching how `samples` was generated over
-    the full node set.
+    `nodes` is the island's node set V_r, `edges_r` its within-island edge
+    set E_r, `neighbors[i]` the within-island neighbours of i,
+    `rec_neighbors[i]` the reconnected neighbours N_i^rec (which lie in
+    OTHER islands), and `states` maps every topology node -> x_i for this
+    sample -- not just the island's, since Parts 1-3 read the far endpoint
+    of each reconnected edge.
+
+    Psi_r does NOT fit _stability_bracket's grad.dyn + k*W shape, so this
+    is a separate routine and F5's bracket stays untouched (spec section
+    14, "Relation to F5 and the shared bracket"). g_i and W_r below
+    duplicate the bracket's first two blocks deliberately, rather than
+    refactoring them out of a function F5 depends on.
+
+    All four parts are computed unconditionally. On models with W_ij == 0
+    (e.g. linear consensus) Parts 2 and 3 come out zero on their own --
+    that is arithmetic, not a special case to branch on.
+    """
+    # g_i -- within-island gradient, identical to F5's dW_r/dx_i.
+    g = {i: model.grad_W_i(i, states[i]) for i in nodes}
+    for u, v in edges_r:
+        grad_u, grad_v = model.grad_W_ij(u, v, states[u], states[v])
+        g[u] = g[u] + grad_u
+        g[v] = g[v] + grad_v
+
+    # W_r -- within-island energy, identical to F5's.
+    W_r = sum(model.W_i(i, states[i]) for i in nodes)
+    W_r += sum(model.W_ij(u, v, states[u], states[v]) for u, v in edges_r)
+
+    part_1 = 0.0
+    part_2 = 0.0
+    part_3 = 0.0
+    for i in nodes:
+        x_i = states[i]
+        rec_i = rec_neighbors.get(i, ())
+
+        # Reconnection dynamics at i: sum over N_i^rec only.
+        rec_flow = np.zeros_like(x_i)
+        for k in rec_i:
+            rec_flow = rec_flow + model.f_ij(i, k, x_i, states[k])
+
+        part_1 += float(np.dot(g[i], rec_flow))
+
+        # Full dynamics at i: node term plus couplings over
+        # (N_i cap V_r) union N_i^rec. The two neighbour sets are disjoint
+        # (a reconnected edge joins distinct islands), so adding rec_flow
+        # to the within-island sum needs no dedup.
+        dyn_i = model.f_i(i, x_i)
+        for k in neighbors[i]:
+            dyn_i = dyn_i + model.f_ij(i, k, x_i, states[k])
+        dyn_i = dyn_i + rec_flow
+
+        for j in rec_i:
+            grad_ij_i, _ = model.grad_W_ij(i, j, x_i, states[j])
+            part_2 += float(np.dot(grad_ij_i, dyn_i))
+            part_3 += model.W_ij(i, j, x_i, states[j])
+
+    part_3 *= config.k_2 / 2.0
+    part_4 = -(config.k_1 - config.k_2) * W_r
+
+    return part_1 + part_2 + part_3 + part_4
+
+
+def f6_reconnection_stability(
+    stable_islands, reconnected_edges, topology, model, samples, config
+):
+    """Reconnection stability-penalty term F6 (spec section 14, revised).
+
+    Sums over stable islands r in S -- NOT over reconnected components.
+    The revised theory derives component stability from a per-island
+    condition Psi_r, so no quantity here refers to a component.
+
+    `reconnected_edges` is the E^rec set of canonical (min, max) tuples
+    (decode_reconnection's third return value); it supplies N_i^rec.
+    `topology` is used for BOTH within-island edge derivation (via
+    _induced_edges, exactly as F5 does) and the global node ordering
+    `sorted(topology.nodes())` along the samples' middle axis.
+
+    The hinge is applied PER ISLAND, before summing over islands: islands
+    with Psi_r < 0 clip to zero rather than offsetting a positive one.
     """
     if len(samples) != config.P_2:
         raise ValueError(
@@ -281,16 +357,32 @@ def f6_reconnection_stability(components, topology, model, samples, config):
     nodes_all = sorted(topology.nodes())
     node_index = {node: idx for idx, node in enumerate(nodes_all)}
 
+    # N_i^rec, read straight off E^rec. No intersection with N_i is needed:
+    # E^rec is a subset of E, so every reconnected edge is already an edge
+    # of the original graph.
+    rec_neighbors = {}
+    for edge in reconnected_edges:
+        u, v = canon(edge)
+        rec_neighbors.setdefault(u, set()).add(v)
+        rec_neighbors.setdefault(v, set()).add(u)
+
     total = 0.0
     for sample in samples:
-        for component in components:
-            nodes = list(component.nodes())
-            edges = list(component.edges())
-            neighbors = {i: set(component.neighbors(i)) for i in nodes}
-            states = {i: sample[node_index[i]] for i in nodes}
+        # Built over the full node set, not per island: a reconnected
+        # neighbour of i lies in a different island.
+        states = {node: sample[node_index[node]] for node in nodes_all}
 
-            total += _stability_bracket(
-                nodes, edges, neighbors, states, model, config.k_2
+        for island in stable_islands:
+            edges_r = _induced_edges(island, topology)
+
+            neighbors = {i: set() for i in island}
+            for u, v in edges_r:
+                neighbors[u].add(v)
+                neighbors[v].add(u)
+
+            psi = _psi_reconnection(
+                island, edges_r, neighbors, rec_neighbors, states, model, config
             )
+            total += max(psi, 0.0)
 
     return config.alpha_2 / config.P_2 * total

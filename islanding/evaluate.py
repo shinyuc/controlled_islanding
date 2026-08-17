@@ -49,7 +49,9 @@ def draw_samples(topology, model, config, n, d):
 def evaluate(A, problem):
     """Decode spanning tree A once and return the combined cost F(A)."""
     stable, unstable = decode_islanding(A, problem.topology)
-    components, _, reconnected = decode_reconnection(A, problem.topology)
+    # The components are no longer needed: revised F6 sums over stable
+    # islands and E^rec, not over reconnected components.
+    _, _, reconnected = decode_reconnection(A, problem.topology)
 
     f1 = f1_unstable_nodes(unstable, problem.cost_data)
     # f2 = f2_unstable_edges(unstable, problem.topology, problem.cost_data)
@@ -62,7 +64,8 @@ def evaluate(A, problem):
         stable, problem.topology, problem.model, problem.samples_1, problem.config
     )
     f6 = f6_reconnection_stability(
-        components, problem.topology, problem.model, problem.samples_2, problem.config
+        stable, reconnected, problem.topology, problem.model,
+        problem.samples_2, problem.config,
     )
 
     return F(f1, f2, f3, f4, f5, f6)
