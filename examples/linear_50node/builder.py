@@ -1,11 +1,12 @@
 """Setup/builder module for the 50-node linear consensus example.
 
 Reuses the shared, topology-agnostic builders from examples/common.py --
-build_model, build_cost_data, build_problem, build_config, build_M,
-faulty_nodes, and faulty_edges are re-exported here unchanged, not
-redefined. Only `build_topology()` and the `LINEAR_50` Setup instance are
-specific to this example, matching the pattern in
-examples/linear_10node/linear_10node.py.
+build_model, build_cost_data, build_problem, build_M, faulty_nodes, and
+faulty_edges are re-exported here unchanged, not redefined. Only
+`build_topology()` and the `LINEAR_50` Setup instance are specific to this
+example, matching the pattern in
+examples/linear_10node/linear_10node.py. This case's `AlgorithmConfig` lives
+separately in examples/linear_50node/config.py.
 
 Weights come from the generated, seeded topology artifact
 (linear_50node_topology.py) -- see docs/example_linear_50node_spec.md and
@@ -17,7 +18,7 @@ runs a solve or any computation beyond definitions.
 
 from islanding.topology import Topology
 from examples.common import (
-    Setup, build_config, build_M, build_model, build_cost_data,
+    Setup, build_M, build_model, build_cost_data,
     build_problem, faulty_nodes, faulty_edges,
 )
 from examples.linear_50node.linear_50node_topology import (

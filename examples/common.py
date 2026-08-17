@@ -8,6 +8,12 @@ module supplies its own topology-specific `build_topology()` and NODES/
 EDGES, and passes the topology in wherever one is needed (`build_M`,
 `build_problem`).
 
+Algorithm parameters are deliberately NOT here: `AlgorithmConfig` choices
+(alpha, k, P, ...) differ substantially per case, so each case owns its own
+`build_config()` in its own config module -- examples/linear_10node/config.py,
+examples/linear_50node/config.py. `build_problem` takes the resulting config
+as a required argument.
+
 Importing this module defines builders only -- it never runs a solve or
 any computation beyond definitions.
 """
@@ -16,7 +22,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from islanding.cost import CostData, AlgorithmConfig, linear_consensus_model
+from islanding.cost import CostData, linear_consensus_model
 from islanding.evaluate import Problem, draw_samples
 
 D = 2  # state dimension x_i in R^D, shared by all current examples
@@ -34,15 +40,6 @@ class Setup:
     edge_weights: dict
     node_costs: dict
     edge_costs: dict
-
-
-def build_config():
-    return AlgorithmConfig(
-        kappa_op=1.0, kappa_rec=0.7,
-        alpha_1=100.0, beta=1.0, k_1=0.3, P_1=20,
-        alpha_2=100.0, gamma=1.0, k_2=0.1, P_2=20,
-        epsilon=0.01, max_iterations=100, swap_supernode_edges=True,
-    )
 
 
 def build_M(nodes, edges, node_weights, edge_weights):
@@ -77,10 +74,21 @@ def build_cost_data(setup):
     return CostData(node_costs=setup.node_costs, edge_costs=setup.edge_costs)
 
 
-def build_problem(setup, topology, seed=None):
+def build_problem(setup, topology, config, seed=None):
+    """Build a Problem for `setup` on `topology`, drawing both sample sets.
+
+    `config` is required -- parameter choices differ substantially per case,
+    so there is no shared baseline to fall back to. Pass the one from the
+    case's own config module (examples/linear_10node/config.py,
+    examples/linear_50node/config.py).
+
+    It has to be supplied *here* rather than swapped onto the returned
+    Problem afterwards, because the draw below reads beta/gamma/P_1/P_2 --
+    a later swap would desync the sample arrays from P_1/P_2, and f5/f6
+    raise on that mismatch.
+    """
     model = build_model(setup)
     cost_data = build_cost_data(setup)
-    config = build_config()
 
     if seed is not None:
         np.random.seed(seed)

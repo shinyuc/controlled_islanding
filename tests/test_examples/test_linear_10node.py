@@ -6,8 +6,9 @@ import numpy as np
 
 from examples.linear_10node.linear_10node import (
     NODES, EDGES, EDGE_FAULTS, build_M,
-    build_topology, build_model, build_config, build_problem,
+    build_topology, build_model, build_problem,
 )
+from examples.linear_10node.config import build_config
 
 
 def _canon(edge):
@@ -64,7 +65,7 @@ def test_cutting_the_faulty_edge_fixes_the_island():
 
 
 def test_build_problem_draws_matching_sample_shapes():
-    problem = build_problem(EDGE_FAULTS, build_topology(), seed=0)
+    problem = build_problem(EDGE_FAULTS, build_topology(), build_config(), seed=0)
 
     assert problem.samples_1.shape == (20, 10, 2)
     assert problem.samples_2.shape == (20, 10, 2)

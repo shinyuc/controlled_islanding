@@ -24,6 +24,7 @@ import numpy as np
 from examples.linear_50node.builder import (
     LINEAR_50, build_topology, build_problem, build_M, faulty_nodes, faulty_edges,
 )
+from examples.linear_50node.config import build_config
 from utils.save import save_result
 from islanding.outer_loop import solve
 from islanding.search import decode_islanding, decode_reconnection
@@ -47,7 +48,7 @@ def _induced_edges(topology, nodes):
 
 def main():
     topology = build_topology()
-    problem = build_problem(SETUP, topology, seed=0)
+    problem = build_problem(SETUP, topology, seed=0, config=build_config())
 
     print(f"Setup: {SETUP.name}")
     print(f"Faulty nodes: {faulty_nodes(SETUP)}")

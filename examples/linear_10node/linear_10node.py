@@ -1,11 +1,12 @@
 """10-node linear consensus example on one shared topology, supporting
 multiple weight/cost setups.
 
-The generic `Setup` dataclass and builders (`build_config`, `build_M`,
-`build_model`, `build_cost_data`, `build_problem`, `faulty_nodes`,
-`faulty_edges`) live in examples/common.py and are re-exported here;
-this module keeps only what's 10-node-specific: NODES, EDGES,
-`build_topology()`, and the Setup instances below. `build_topology()`
+The generic `Setup` dataclass and builders (`build_M`, `build_model`,
+`build_cost_data`, `build_problem`, `faulty_nodes`, `faulty_edges`) live in
+examples/common.py and are re-exported here; this module keeps only what's
+10-node-specific: NODES, EDGES, `build_topology()`, and the Setup instances
+below. This case's `AlgorithmConfig` lives separately in
+examples/linear_10node/config.py, which records why its alpha is what it is. `build_topology()`
 stays here (rather than in common.py) since it's specific to this
 example's network -- all setups on this topology share it, which is
 what makes them comparable.
@@ -36,7 +37,7 @@ definitions.
 
 from islanding.topology import Topology
 from examples.common import (
-    Setup, build_config, build_M, build_model, build_cost_data,
+    Setup, build_M, build_model, build_cost_data,
     build_problem, faulty_nodes, faulty_edges, _canon,
 )
 

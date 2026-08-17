@@ -13,6 +13,7 @@ from examples.linear_50node.linear_50node_topology import (
 from examples.linear_50node.builder import (
     LINEAR_50, build_topology, build_M, build_problem, faulty_nodes,
 )
+from examples.linear_50node.config import build_config
 
 
 def _canon(edge):
@@ -65,7 +66,7 @@ def test_faults_are_real():
 
 
 def test_build_problem_draws_matching_sample_shapes():
-    problem = build_problem(LINEAR_50, build_topology(), seed=0)
+    problem = build_problem(LINEAR_50, build_topology(), build_config(), seed=0)
 
     assert problem.samples_1.shape == (problem.config.P_1, 50, 2)
     assert problem.samples_2.shape == (problem.config.P_2, 50, 2)
