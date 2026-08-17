@@ -1,10 +1,10 @@
-"""Tests for examples/linear_10node.py's NODE_AND_EDGE_FAULTS setup. None
-of these call solve() -- they check the setup, not the optimizer.
+"""Tests for examples/linear_10node/linear_10node.py's NODE_AND_EDGE_FAULTS
+setup. None of these call solve() -- they check the setup, not the optimizer.
 """
 
 import numpy as np
 
-from examples.linear_10node import (
+from examples.linear_10node.linear_10node import (
     NODES, EDGES, NODE_AND_EDGE_FAULTS,
     build_topology, build_M, faulty_nodes, faulty_edges,
 )

@@ -39,8 +39,8 @@ class Setup:
 def build_config():
     return AlgorithmConfig(
         kappa_op=1.0, kappa_rec=0.7,
-        alpha_1=1.0, beta=1.0, k_1=0.2, P_1=20,
-        alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=20,
+        alpha_1=100.0, beta=1.0, k_1=0.3, P_1=20,
+        alpha_2=100.0, gamma=1.0, k_2=0.1, P_2=20,
         epsilon=0.01, max_iterations=100, swap_supernode_edges=True,
     )
 

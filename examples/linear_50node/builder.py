@@ -4,7 +4,8 @@ Reuses the shared, topology-agnostic builders from examples/common.py --
 build_model, build_cost_data, build_problem, build_config, build_M,
 faulty_nodes, and faulty_edges are re-exported here unchanged, not
 redefined. Only `build_topology()` and the `LINEAR_50` Setup instance are
-specific to this example, matching the pattern in examples/linear_10node.py.
+specific to this example, matching the pattern in
+examples/linear_10node/linear_10node.py.
 
 Weights come from the generated, seeded topology artifact
 (linear_50node_topology.py) -- see docs/example_linear_50node_spec.md and

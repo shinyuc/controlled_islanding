@@ -12,22 +12,23 @@ How to run
 ----------
 From the repo root, with the venv active:
 
-    python -m examples.run_linear_10node
+    python -m examples.linear_10node.run_linear_10node
 
-Use the `-m` form, not `python examples/run_linear_10node.py` -- that
-puts the repo root on sys.path so `examples.linear_10node` resolves.
+Use the `-m` form, not
+`python examples/linear_10node/run_linear_10node.py` -- that puts the repo
+root on sys.path so `examples.linear_10node.linear_10node` resolves.
 
 This script currently runs the EDGE_FAULTS setup (see SETUP below).
-examples/linear_10node.py also defines NODE_AND_EDGE_FAULTS; to run that
-scenario instead, change the setup passed to build_problem() in main()
-below (and update SETUP, which _lambda_min() also relies on).
+examples/linear_10node/linear_10node.py also defines NODE_AND_EDGE_FAULTS;
+to run that scenario instead, change the setup passed to build_problem() in
+main() below (and update SETUP, which _lambda_min() also relies on).
 """
 
 import time
 
 import numpy as np
 
-from examples.linear_10node import (
+from examples.linear_10node.linear_10node import (
     EDGE_FAULTS, NODE_AND_EDGE_FAULTS, build_topology, build_problem, build_M,
 )
 from islanding.outer_loop import solve

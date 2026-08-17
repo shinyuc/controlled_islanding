@@ -3,7 +3,7 @@
 Not a test -- makes no assertions, because the answer isn't known in
 advance. Compare the printed report against the prediction in
 docs/example_linear_50node_spec.md section 8. Mirrors
-examples/run_linear_10node.py's report format; see
+examples/linear_10node/run_linear_10node.py's report format; see
 docs/run_linear_10_node_spec.md for that format's rationale.
 
 How to run
