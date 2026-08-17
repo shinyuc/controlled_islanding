@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from islanding.cost import canon
-from islanding.search import decode_islanding, decode_reconnection
+from islanding.search import build_reconnected_components
 
 # utils/save.py -> utils/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -33,10 +33,13 @@ def save_result(result, problem, example_name, results_dir=None):
     os.makedirs(results_dir, exist_ok=True)
 
     topology = problem.topology
-    tree = result.tree
 
-    stable, unstable = decode_islanding(tree, topology)
-    components, _, reconnected = decode_reconnection(tree, topology)
+    # Read the partition off the result rather than decoding a tree: the
+    # inner solver may not have produced one (a MILP does not).
+    stable = result.stable_islands
+    unstable = result.unstable_islands
+    reconnected = result.reconnected_edges
+    components = build_reconnected_components(stable, reconnected, topology)
 
     # Original edges not inside any (stable or unstable) island -- the cut
     # set. Do NOT serialize the raw tree: it's over augmented nodes

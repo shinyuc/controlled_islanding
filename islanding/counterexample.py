@@ -12,7 +12,9 @@ wire counterexample=linear_counterexample(...) into linear_consensus_model)
 
 import numpy as np
 
-from islanding.search import decode_islanding, decode_reconnection
+from islanding.search import (
+    decode_islanding, decode_reconnection, build_reconnected_components,
+)
 
 
 def _canon(edge):
@@ -74,7 +76,27 @@ def linear_counterexample(node_weights, edge_weights):
 
 
 def find_counterexamples(A, problem):
-    """Decode A once, check every stable island and reconnected component.
+    """Tree-based entry point: decode A, then check the partition.
+
+    Kept for callers that hold a spanning tree. The outer loop uses
+    find_counterexamples_for_partition instead, since its inner solver
+    already returns the partition and may not have a tree at all.
+    """
+    stable_islands, _ = decode_islanding(A, problem.topology)
+    _, _, reconnected_edges = decode_reconnection(A, problem.topology)
+    return find_counterexamples_for_partition(
+        stable_islands, reconnected_edges, problem
+    )
+
+
+def find_counterexamples_for_partition(stable_islands, reconnected_edges, problem):
+    """Check every stable island and reconnected component of a partition.
+
+    Takes the partition directly -- `stable_islands` and the E^rec set --
+    rather than a spanning tree, so an inner solver that produces no tree
+    (a MILP) can be checked identically. The reconnected components are
+    rebuilt from the two via search.build_reconnected_components, the same
+    construction decode_reconnection uses.
 
     Returns (island_witnesses, component_witnesses) -- islands checked
     against Omega's boundary (beta-scaled), components against Omega_hat's
@@ -88,8 +110,9 @@ def find_counterexamples(A, problem):
     factor = 1.0 + model.inflation(topology)
     d = problem.samples_1.shape[2]
 
-    stable_islands, _ = decode_islanding(A, topology)
-    components, _, _ = decode_reconnection(A, topology)
+    components = build_reconnected_components(
+        stable_islands, reconnected_edges, topology
+    )
 
     island_radius = (2.0 * factor * config.beta) ** 0.5
     component_radius = (2.0 * factor * config.gamma) ** 0.5

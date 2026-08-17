@@ -9,7 +9,7 @@ from islanding.topology import Topology
 from islanding.augmented import SOURCE, SINK
 from islanding.cost import CostData, AlgorithmConfig, linear_consensus_model
 from islanding.evaluate import Problem
-from islanding.counterexample import find_counterexamples
+from islanding.counterexample import find_counterexamples_for_partition
 from islanding.outer_loop import solve, _augment
 
 
@@ -61,7 +61,7 @@ def test_solve_converges_to_a_genuinely_stable_tree():
     # sample-independent genuinely stable (M's eigenvalues don't depend on
     # sampling), so the augment path never actually fires here. This test
     # therefore only asserts what's structurally guaranteed: the loop
-    # converges, and the returned tree really is genuinely stable (no
+    # converges, and the returned partition really is genuinely stable (no
     # remaining counterexample) -- not witnesses_added or outer_iterations,
     # which this particular fixture cannot exercise. See
     # test_augment_grows_island_samples_and_leaves_components_unchanged
@@ -73,7 +73,9 @@ def test_solve_converges_to_a_genuinely_stable_tree():
 
     assert result.reason == "converged"
 
-    island_witnesses, component_witnesses = find_counterexamples(result.tree, problem)
+    island_witnesses, component_witnesses = find_counterexamples_for_partition(
+        result.stable_islands, result.reconnected_edges, problem
+    )
     assert island_witnesses == []
     assert component_witnesses == []
 

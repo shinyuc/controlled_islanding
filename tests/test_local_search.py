@@ -86,8 +86,8 @@ def test_local_search_from_a0_reaches_zero_in_one_swap():
     result = local_search(problem, initial_tree=_tree_a0())
 
     assert result.objective == pytest.approx(0.0, abs=1e-9)
-    assert result.reason == "zero_objective"
-    assert result.iterations == 1
+    assert result.info["reason"] == "zero_objective"
+    assert result.info["iterations"] == 1
 
 
 def test_local_search_from_a1_already_optimal():
@@ -95,8 +95,8 @@ def test_local_search_from_a1_already_optimal():
     result = local_search(problem, initial_tree=_tree_a1())
 
     assert result.objective == pytest.approx(0.0, abs=1e-9)
-    assert result.reason == "zero_objective"
-    assert result.iterations == 0
+    assert result.info["reason"] == "zero_objective"
+    assert result.info["iterations"] == 0
 
 
 def test_local_search_without_supernode_swaps_cannot_merge_islands():
@@ -108,13 +108,13 @@ def test_local_search_without_supernode_swaps_cannot_merge_islands():
     # Every supernode edge present in A0 is still present in the result --
     # the restricted search can never remove or add one, so it cannot
     # reach {1,2} as a single island.
-    assert result.tree.has_edge(SOURCE, 1)
-    assert result.tree.has_edge(SOURCE, 2)
-    assert result.tree.has_edge(SOURCE, SINK)
-    assert not result.tree.has_edge(SINK, 1)
-    assert not result.tree.has_edge(SINK, 2)
+    assert result.info["tree"].has_edge(SOURCE, 1)
+    assert result.info["tree"].has_edge(SOURCE, 2)
+    assert result.info["tree"].has_edge(SOURCE, SINK)
+    assert not result.info["tree"].has_edge(SINK, 1)
+    assert not result.info["tree"].has_edge(SINK, 2)
 
-    assert result.reason == "local_optimum"
+    assert result.info["reason"] == "local_optimum"
 
 
 def test_local_search_max_iterations_zero_stops_immediately():
@@ -123,8 +123,8 @@ def test_local_search_max_iterations_zero_stops_immediately():
 
     result = local_search(problem, initial_tree=_tree_a0())
 
-    assert result.reason == "max_iterations"
-    assert result.iterations == 0
+    assert result.info["reason"] == "max_iterations"
+    assert result.info["iterations"] == 0
 
 
 def test_local_search_from_a2_reaches_zero_in_one_swap():
@@ -135,5 +135,5 @@ def test_local_search_from_a2_reaches_zero_in_one_swap():
     result = local_search(problem, initial_tree=_tree_a2())
 
     assert result.objective == pytest.approx(0.0, abs=1e-9)
-    assert result.reason == "zero_objective"
-    assert result.iterations == 1
+    assert result.info["reason"] == "zero_objective"
+    assert result.info["iterations"] == 1

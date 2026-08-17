@@ -33,8 +33,8 @@ from examples.linear_10node.linear_10node import (
 )
 from examples.linear_10node.config import build_config
 from islanding.outer_loop import solve
-from islanding.search import decode_islanding, decode_reconnection
-from islanding.counterexample import find_counterexamples
+from islanding.search import build_reconnected_components
+from islanding.counterexample import find_counterexamples_for_partition
 from islanding.cost import (
     canon, f1_unstable_nodes, f2_unstable_edges, f3_operation_edges,
     f4_reconnection, f5_stability_penalty, f6_reconnection_stability, F,
@@ -64,9 +64,12 @@ def main():
     result = solve(problem, max_outer_iterations=20)
     elapsed = time.perf_counter() - start
 
-    tree = result.tree
-    stable, unstable = decode_islanding(tree, topology)
-    components, _, reconnected = decode_reconnection(tree, topology)
+    # The partition comes straight off the result -- the outer loop no
+    # longer hands back a tree to decode (an inner MILP would have none).
+    stable = result.stable_islands
+    unstable = result.unstable_islands
+    reconnected = result.reconnected_edges
+    components = build_reconnected_components(stable, reconnected, topology)
 
     print("=== Solve ===")
     print(f"reason:           {result.reason}")
@@ -127,7 +130,9 @@ def main():
     print()
 
     print("=== Stability check ===")
-    island_witnesses, component_witnesses = find_counterexamples(tree, problem)
+    island_witnesses, component_witnesses = find_counterexamples_for_partition(
+        stable, reconnected, problem
+    )
     print(f"Island witnesses:    {len(island_witnesses)}")
     print(f"Component witnesses: {len(component_witnesses)}")
 

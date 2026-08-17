@@ -2,21 +2,14 @@
 lines 4-12). See docs/local_search_spec.md for the full specification.
 """
 
-from dataclasses import dataclass
-
 import networkx as nx
 
 from islanding.augmented import SOURCE, SINK, augmented_graph
-from islanding.search import initial_spanning_tree
+from islanding.search import (
+    initial_spanning_tree, decode_islanding, decode_reconnection,
+)
 from islanding.evaluate import evaluate
-
-
-@dataclass(frozen=True)
-class SearchResult:
-    tree: object
-    objective: float
-    reason: str  # "zero_objective" | "local_optimum" | "max_iterations"
-    iterations: int
+from islanding.inner import InnerResult
 
 
 def _is_supernode(node):
@@ -107,8 +100,29 @@ def _feasible_swaps(tree, topology, swap_supernode_edges):
     return swaps
 
 
+def _finish(tree, objective, reason, iterations, problem):
+    """Decode the final tree once and package it as an InnerResult.
+
+    The tree is local search's own encoding, not part of the inner
+    problem, so it rides along in `info` with the two other
+    solver-specific diagnostics rather than in a required field.
+    """
+    stable_islands, unstable_islands = decode_islanding(tree, problem.topology)
+    _, _, reconnected_edges = decode_reconnection(tree, problem.topology)
+
+    return InnerResult(
+        stable_islands=stable_islands,
+        unstable_islands=unstable_islands,
+        reconnected_edges=reconnected_edges,
+        objective=objective,
+        info={"reason": reason, "iterations": iterations, "tree": tree},
+    )
+
+
 def local_search(problem, initial_tree=None):
-    """Locally optimal spanning tree of Gbar for the given (fixed-sample) Problem."""
+    """Locally optimal spanning tree of Gbar for the given (fixed-sample)
+    Problem, returned as an InnerResult (the decoded partition).
+    """
     if initial_tree is None:
         tree = initial_spanning_tree(augmented_graph(problem.topology))
     else:
@@ -125,16 +139,10 @@ def local_search(problem, initial_tree=None):
         )
 
         if objective == 0:
-            return SearchResult(
-                tree=tree, objective=objective,
-                reason="zero_objective", iterations=iterations,
-            )
+            return _finish(tree, objective, "zero_objective", iterations, problem)
 
         if iterations >= config.max_iterations:
-            return SearchResult(
-                tree=tree, objective=objective,
-                reason="max_iterations", iterations=iterations,
-            )
+            return _finish(tree, objective, "max_iterations", iterations, problem)
 
         swaps = _feasible_swaps(tree, problem.topology, config.swap_supernode_edges)
 
@@ -150,10 +158,7 @@ def local_search(problem, initial_tree=None):
                 best_swap = candidate
 
         if best_swap is None or not (objective > (1 + config.epsilon) * best_value):
-            return SearchResult(
-                tree=tree, objective=objective,
-                reason="local_optimum", iterations=iterations,
-            )
+            return _finish(tree, objective, "local_optimum", iterations, problem)
 
         tree = best_swap
         iterations += 1

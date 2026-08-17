@@ -101,10 +101,47 @@ def decode_reconnection(tree, topology):
                 and not tree.has_edge(relay_u, relay_v)):
             reconnected_edges.append((u, v, idx_u, idx_v))
 
+    reconnected_edge_set = {(u, v) for u, v, _, _ in reconnected_edges}
+    components = build_reconnected_components(
+        stable_islands, reconnected_edge_set, topology
+    )
+
+    return components, unstable_islands, reconnected_edge_set
+
+
+def build_reconnected_components(stable_islands, reconnected_edges, topology):
+    """Group stable islands into reconnected components.
+
+    Split out of decode_reconnection so the same construction serves
+    callers that already hold a partition (an inner solver's InnerResult)
+    and never had a spanning tree to decode -- see
+    counterexample.find_counterexamples_for_partition. decode_reconnection
+    itself calls this, so there is exactly one implementation.
+
+    `reconnected_edges` is E^rec as canonical (min, max) tuples; both
+    endpoints of every such edge must lie in some stable island, which is
+    what E^rec's definition guarantees.
+
+    Each component's edges come from two disjoint sources: the original
+    edges induced WITHIN each constituent island (computed per island,
+    never over the merged node set -- an edge whose endpoints land in the
+    same merged component only because two OTHER islands got reconnected
+    must not be readmitted), plus the reconnected edges joining islands
+    within that group.
+    """
+    node_to_island = {}
+    for index, island in enumerate(stable_islands):
+        for node in island:
+            node_to_island[node] = index
+
+    grouped_edges = []
     merge_graph = nx.Graph()
     merge_graph.add_nodes_from(range(len(stable_islands)))
-    for _, _, idx_u, idx_v in reconnected_edges:
+    for u, v in reconnected_edges:
+        u, v = (u, v) if u < v else (v, u)
+        idx_u, idx_v = node_to_island[u], node_to_island[v]
         merge_graph.add_edge(idx_u, idx_v)
+        grouped_edges.append((u, v, idx_u, idx_v))
 
     components = []
     for group in nx.connected_components(merge_graph):
@@ -117,7 +154,7 @@ def decode_reconnection(tree, topology):
                 u, v = (u, v) if u < v else (v, u)
                 if u in island and v in island:
                     component.add_edge(u, v)
-        for u, v, idx_u, idx_v in reconnected_edges:
+        for u, v, idx_u, idx_v in grouped_edges:
             if idx_u in group and idx_v in group:
                 component.add_edge(u, v)
 
@@ -125,7 +162,4 @@ def decode_reconnection(tree, topology):
         components.append(component)
 
     components.sort(key=lambda component: min(component.nodes()))
-
-    reconnected_edge_set = {(u, v) for u, v, _, _ in reconnected_edges}
-
-    return components, unstable_islands, reconnected_edge_set
+    return components

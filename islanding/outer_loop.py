@@ -1,26 +1,34 @@
-"""Constraint-generation outer loop wrapping local_search (Algorithm 1,
-lines 13-19). See docs/outer_loop_spec.md for the full specification.
+"""Constraint-generation outer loop (Algorithm 1, lines 13-19). See
+docs/outer_loop_spec.md for the full specification.
 
-The algorithm itself (decode, six terms, local search, eigenvector
-counterexamples) is unchanged -- this layer only grows the sample sets
-and re-runs local_search.
+The inner solver is a parameter, defaulting to local_search. This layer
+only grows the sample sets and re-runs the inner solver; it works with the
+partition the solver returns (an InnerResult) and never with a spanning
+tree, which is local search's private encoding rather than part of the
+inner problem.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 from islanding.local_search import local_search
-from islanding.counterexample import find_counterexamples
+from islanding.counterexample import find_counterexamples_for_partition
 
 
 @dataclass(frozen=True)
 class SolveResult:
-    tree: object
     objective: float
     outer_iterations: int
     witnesses_added: int
     reason: str  # "converged" | "max_outer_iterations"
+    stable_islands: list       # list[frozenset] -- the set S
+    unstable_islands: list     # list[frozenset] -- the set U
+    reconnected_edges: set     # E^rec, canonical (min, max) tuples
+    # Optional: only inner solvers that use the matroid encoding have one.
+    # A MILP will leave this None, so read the partition fields instead.
+    tree: object = None
+    info: dict = field(default_factory=dict)  # the inner solver's diagnostics
 
 
 def _augment(problem, island_witnesses, component_witnesses):
@@ -41,30 +49,55 @@ def _augment(problem, island_witnesses, component_witnesses):
     return replace(problem, samples_1=samples_1, samples_2=samples_2, config=config)
 
 
-def solve(problem, max_outer_iterations, initial_tree=None):
-    """Repeatedly local_search, then grow the sample sets with any
+def _solve_result(inner, outer_iterations, witnesses_added, reason):
+    """Lift an inner solver's InnerResult into a SolveResult."""
+    return SolveResult(
+        objective=inner.objective,
+        outer_iterations=outer_iterations,
+        witnesses_added=witnesses_added,
+        reason=reason,
+        stable_islands=inner.stable_islands,
+        unstable_islands=inner.unstable_islands,
+        reconnected_edges=inner.reconnected_edges,
+        tree=inner.info.get("tree"),
+        info=inner.info,
+    )
+
+
+def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree=None):
+    """Repeatedly run `inner_solver`, then grow the sample sets with any
     counterexample found, until convergence or the outer-iteration cap.
 
-    Only the first pass uses `initial_tree`; local_search re-initializes
-    its own tree on every later pass, so nothing but the (growing) sample
-    sets carries between passes.
+    `inner_solver(problem)` returns an InnerResult; the loop uses that
+    partition directly and never decodes a tree.
+
+    `initial_tree` is a local-search-specific warm start, so it is
+    forwarded only when actually supplied, and only on the first pass. An
+    inner solver that takes no such argument (a MILP) is therefore never
+    handed one. local_search re-initializes its own tree on every later
+    pass, so nothing but the (growing) sample sets carries between passes.
     """
     current = problem
     total_added = 0
 
     for outer in range(max_outer_iterations):
-        result = local_search(current, initial_tree=initial_tree if outer == 0 else None)
-        island_witnesses, component_witnesses = find_counterexamples(result.tree, current)
+        warm_start = (
+            {"initial_tree": initial_tree}
+            if outer == 0 and initial_tree is not None
+            else {}
+        )
+        result = inner_solver(current, **warm_start)
+
+        island_witnesses, component_witnesses = find_counterexamples_for_partition(
+            result.stable_islands, result.reconnected_edges, current
+        )
 
         if not island_witnesses and not component_witnesses:
-            return SolveResult(
-                result.tree, result.objective, outer, total_added, "converged",
-            )
+            return _solve_result(result, outer, total_added, "converged")
 
         total_added += len(island_witnesses) + len(component_witnesses)
         current = _augment(current, island_witnesses, component_witnesses)
 
-    return SolveResult(
-        result.tree, result.objective, max_outer_iterations, total_added,
-        "max_outer_iterations",
+    return _solve_result(
+        result, max_outer_iterations, total_added, "max_outer_iterations"
     )
