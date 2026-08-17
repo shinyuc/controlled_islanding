@@ -405,3 +405,62 @@ def test_f6_node_indexing_uses_global_not_island_local_order():
     )
 
     assert f6 == pytest.approx(0.2625)
+
+
+def _synthetic_edge_energy_model(base_model):
+    """Spec section 16b's synthetic model -- TEST FIXTURE ONLY.
+
+    Not a physical system model, so it lives here rather than beside
+    linear_consensus_model in islanding/cost.py. Its only purpose is to
+    make W_ij nonzero, which is what brings Psi_r's Parts 2 and 3 to life;
+    on linear consensus both are identically zero and untestable.
+
+    Derived from `base_model` by swapping exactly two callables, so the
+    dynamics (f_i, f_ij), the node energy (W_i, grad_W_i), the sampler and
+    the inflation rule are the linear-consensus ones, closed over the same
+    node/edge weights. Any deviation from section 16's result is therefore
+    attributable purely to the edge-energy terms.
+
+        W_ij(i, j, x_i, x_j)      = 0.5 * (x_i - x_j)^2       (c = 1)
+        grad_W_ij(i, j, x_i, x_j) = (x_i - x_j, -(x_i - x_j))
+    """
+
+    def W_ij(i, j, x_i, x_j):
+        delta = x_i - x_j
+        return 0.5 * float(np.dot(delta, delta))
+
+    def grad_W_ij(i, j, x_i, x_j):
+        delta = x_i - x_j
+        return (delta, -delta)
+
+    return replace(base_model, W_ij=W_ij, grad_W_ij=grad_W_ij)
+
+
+def test_f6_all_four_parts_with_nonzero_edge_energy():
+    # Hand-traced ground truth from spec section 16b: the section 16 fixture
+    # with ONLY the model swapped, so every difference from 0.2625 comes
+    # from the W_ij terms.
+    #
+    #   island {1,2,3}: g_1 = 0.5 + 0.25 + 0.25 = 1.0, and node 1's full
+    #     dynamics sum to -1.25, giving parts
+    #     -1.25, -0.3125, +0.003125, -0.2  ->  Psi = -1.759375 -> 0
+    #   island {4,5}:  x_4 == x_5, so the within-island edge drops out of
+    #     the gradients (g_4 = 0.25) and W_45 = 0; parts
+    #     +0.3125, -0.25, +0.003125, -0.05  ->  Psi = +0.015625
+    #   island {6,7}:  no reconnected neighbours, x_6 == x_7, so Part 4
+    #     only  ->  Psi = -0.05 -> 0
+    #
+    # The surviving island's Psi_r is a small positive assembled from four
+    # mixed-sign terms, so dropping or mis-signing any one part shifts the
+    # total visibly -- and most single-part errors flip it negative, which
+    # collapses F6 to 0. Section 16's linear fixture cannot detect a wrong
+    # Part 2 or 3 at all, since both are identically zero there.
+    topology, linear_model, config, stable_islands, reconnected_edges = _f6_fixture()
+    model = _synthetic_edge_energy_model(linear_model)
+    samples = _f6_traced_samples()
+
+    f6 = f6_reconnection_stability(
+        stable_islands, reconnected_edges, topology, model, samples, config
+    )
+
+    assert f6 == pytest.approx(0.015625)
