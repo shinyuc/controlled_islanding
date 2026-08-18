@@ -62,7 +62,7 @@ def test_solve_converges_to_a_genuinely_stable_tree():
     # sampling), so the augment path never actually fires here. This test
     # therefore only asserts what's structurally guaranteed: the loop
     # converges, and the returned partition really is genuinely stable (no
-    # remaining counterexample) -- not witnesses_added or outer_iterations,
+    # remaining counterexample) -- not the witness totals or outer_iterations,
     # which this particular fixture cannot exercise. See
     # test_augment_grows_island_samples_and_leaves_components_unchanged
     # below for a direct, trajectory-independent test of the augment path.

@@ -20,7 +20,14 @@ from islanding.counterexample import find_counterexamples_for_partition
 class SolveResult:
     objective: float
     outer_iterations: int
-    witnesses_added: int
+    # Running totals over every outer pass, split by side so it is visible
+    # whether the island side (F5) or the component side (F6) is driving
+    # the iteration. These are cumulative counts of witnesses ADDED to the
+    # sample sets -- not the final check on the returned partition, which
+    # is zero on both sides whenever reason == "converged".
+    total_witnesses_added: int
+    total_island_witnesses_added: int
+    total_component_witnesses_added: int
     reason: str  # "converged" | "max_outer_iterations"
     stable_islands: list       # list[frozenset] -- the set S
     unstable_islands: list     # list[frozenset] -- the set U
@@ -49,12 +56,14 @@ def _augment(problem, island_witnesses, component_witnesses):
     return replace(problem, samples_1=samples_1, samples_2=samples_2, config=config)
 
 
-def _solve_result(inner, outer_iterations, witnesses_added, reason):
+def _solve_result(inner, outer_iterations, island_added, component_added, reason):
     """Lift an inner solver's InnerResult into a SolveResult."""
     return SolveResult(
         objective=inner.objective,
         outer_iterations=outer_iterations,
-        witnesses_added=witnesses_added,
+        total_witnesses_added=island_added + component_added,
+        total_island_witnesses_added=island_added,
+        total_component_witnesses_added=component_added,
         reason=reason,
         stable_islands=inner.stable_islands,
         unstable_islands=inner.unstable_islands,
@@ -78,7 +87,8 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
     pass, so nothing but the (growing) sample sets carries between passes.
     """
     current = problem
-    total_added = 0
+    island_added = 0
+    component_added = 0
 
     for outer in range(max_outer_iterations):
         warm_start = (
@@ -102,11 +112,15 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
         )
 
         if not island_witnesses and not component_witnesses:
-            return _solve_result(result, outer, total_added, "converged")
+            return _solve_result(
+                result, outer, island_added, component_added, "converged"
+            )
 
-        total_added += len(island_witnesses) + len(component_witnesses)
+        island_added += len(island_witnesses)
+        component_added += len(component_witnesses)
         current = _augment(current, island_witnesses, component_witnesses)
 
     return _solve_result(
-        result, max_outer_iterations, total_added, "max_outer_iterations"
+        result, max_outer_iterations, island_added, component_added,
+        "max_outer_iterations",
     )

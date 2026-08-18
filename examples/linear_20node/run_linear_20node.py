@@ -68,10 +68,12 @@ def main():
     components = build_reconnected_components(stable, reconnected, topology)
 
     print("=== Solve ===")
-    print(f"reason:           {result.reason}")
-    print(f"outer_iterations: {result.outer_iterations}")
-    print(f"witnesses_added:  {result.witnesses_added}")
-    print(f"runtime (s):      {elapsed:.3f}")
+    print(f"reason:                     {result.reason}")
+    print(f"outer_iterations:           {result.outer_iterations}")
+    print(f"total witnesses added:      {result.total_witnesses_added}")
+    print(f"  island witnesses (F5):    {result.total_island_witnesses_added}")
+    print(f"  component witnesses (F6): {result.total_component_witnesses_added}")
+    print(f"runtime (s):                {elapsed:.3f}")
     print()
 
     print("=== Post-islanding ===")
@@ -129,8 +131,8 @@ def main():
     island_witnesses, component_witnesses = find_counterexamples_for_partition(
         stable, reconnected, problem
     )
-    print(f"Island witnesses:    {len(island_witnesses)}")
-    print(f"Component witnesses: {len(component_witnesses)}")
+    print(f"Final island witnesses:    {len(island_witnesses)}")
+    print(f"Final component witnesses: {len(component_witnesses)}")
 
     k1_half = config.k_1 / 2
     for island in stable:
