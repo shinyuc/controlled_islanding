@@ -88,6 +88,15 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
         )
         result = inner_solver(current, **warm_start)
 
+        # .get() rather than []: an inner solver need not report a reason
+        # (a MILP's info carries different keys).
+        if result.info.get("reason") == "max_iterations":
+            print(
+                f"WARNING: inner solver hit max_iterations on outer pass "
+                f"{outer}; objective = {result.objective}",
+                flush=True,
+            )
+
         island_witnesses, component_witnesses = find_counterexamples_for_partition(
             result.stable_islands, result.reconnected_edges, current
         )

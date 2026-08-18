@@ -142,6 +142,16 @@ def local_search(problem, initial_tree=None):
             return _finish(tree, objective, "zero_objective", iterations, problem)
 
         if iterations >= config.max_iterations:
+            # Surfaced immediately rather than only through the returned
+            # reason: an unconverged inner solve silently feeds a
+            # not-locally-optimal partition to the outer loop. flush=True
+            # so it lands in a nohup log as it happens, not at exit.
+            print(
+                f"WARNING: local search hit max_iterations "
+                f"({config.max_iterations}) without converging; "
+                f"objective = {objective}",
+                flush=True,
+            )
             return _finish(tree, objective, "max_iterations", iterations, problem)
 
         swaps = _feasible_swaps(tree, problem.topology, config.swap_supernode_edges)
