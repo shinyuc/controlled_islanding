@@ -5,8 +5,8 @@ advance. Compare the printed report against the prediction in
 docs/example_linear_10node_spec.md section 8. See
 docs/run_linear_10_node_spec.md for the report format this follows.
 
-Nothing is saved to disk yet -- deferred until the runtime (printed in
-the "Solve" section) tells us whether that's actually needed.
+Writes a JSON summary via utils.save.save_result, matching the 20-, 30-
+and 50-node scripts, so every case produces a comparable result file.
 
 How to run
 ----------
@@ -30,8 +30,10 @@ import numpy as np
 
 from examples.linear_10node.linear_10node import (
     EDGE_FAULTS, NODE_AND_EDGE_FAULTS, build_topology, build_problem, build_M,
+    faulty_nodes, faulty_edges,
 )
 from examples.linear_10node.config import build_config
+from utils.save import save_result
 from islanding.outer_loop import solve
 from islanding.search import build_reconnected_components
 from islanding.counterexample import find_counterexamples_for_partition
@@ -82,9 +84,11 @@ def main():
 
     print("=== Post-islanding ===")
     print(f"Stable islands ({len(stable)}):")
+    island_lambda_min = []
     for island in stable:
         nodes = sorted(island)
         lam = _lambda_min(nodes, _induced_edges(topology, island))
+        island_lambda_min.append(lam)
         print(f"  {nodes}  lambda_min = {lam:.4f}")
 
     print(f"Unstable islands ({len(unstable)}):")
@@ -102,9 +106,11 @@ def main():
     print("=== Reconnection ===")
     print(f"Reconnected edges: {sorted(reconnected)}")
     print(f"Reconnected components ({len(components)}):")
+    component_lambda_min = []
     for component in components:
         nodes = sorted(component.nodes())
         lam = _lambda_min(nodes, list(component.edges()))
+        component_lambda_min.append(lam)
         print(f"  {nodes}  lambda_min = {lam:.4f}")
     print(f"Unstable islands ({len(unstable)}):")
     for island in unstable:
@@ -158,6 +164,28 @@ def main():
                 "-- passes the counterexample check (which is still "
                 "component-based; revised F6 is per-island)"
             )
+    print()
+
+    path = save_result(
+        result, problem, example_name="linear_10node",
+        runtime_seconds=elapsed,
+        setup_name=SETUP.name,
+        faulty_nodes=faulty_nodes(SETUP),
+        faulty_edges=faulty_edges(SETUP),
+        island_lambda_min=island_lambda_min,
+        component_lambda_min=component_lambda_min,
+        cost_terms={
+            "f1": f1, "f2": f2, "f3": f3, "f4": f4, "f5": f5, "f6": f6,
+            "total": total,
+            # evaluate() currently zeroes F2, and `total` above was
+            # computed as F(f1, 0.0, f3, f4, f5, f6) to match; the f2
+            # recorded here is the unmuted value, for reference only.
+            "f2_muted": True,
+        },
+        final_island_witnesses=len(island_witnesses),
+        final_component_witnesses=len(component_witnesses),
+    )
+    print(f"Saved result to {path}")
 
 
 if __name__ == "__main__":

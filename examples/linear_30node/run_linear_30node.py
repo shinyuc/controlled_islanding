@@ -81,9 +81,11 @@ def main():
 
     print("=== Post-islanding ===")
     print(f"Stable islands ({len(stable)}):")
+    island_lambda_min = []
     for island in stable:
         nodes = sorted(island)
         lam = _lambda_min(nodes, _induced_edges(topology, island))
+        island_lambda_min.append(lam)
         print(f"  {nodes}  lambda_min = {lam:.4f}")
 
     print(f"Unstable islands ({len(unstable)}):")
@@ -101,9 +103,11 @@ def main():
     print("=== Reconnection ===")
     print(f"Reconnected edges: {sorted(reconnected)}")
     print(f"Reconnected components ({len(components)}):")
+    component_lambda_min = []
     for component in components:
         nodes = sorted(component.nodes())
         lam = _lambda_min(nodes, list(component.edges()))
+        component_lambda_min.append(lam)
         print(f"  {nodes}  lambda_min = {lam:.4f}")
     print(f"Unstable islands ({len(unstable)}):")
     for island in unstable:
@@ -159,7 +163,25 @@ def main():
             )
     print()
 
-    path = save_result(result, problem, example_name="linear_30node")
+    path = save_result(
+        result, problem, example_name="linear_30node",
+        runtime_seconds=elapsed,
+        setup_name=SETUP.name,
+        faulty_nodes=faulty_nodes(SETUP),
+        faulty_edges=faulty_edges(SETUP),
+        island_lambda_min=island_lambda_min,
+        component_lambda_min=component_lambda_min,
+        cost_terms={
+            "f1": f1, "f2": f2, "f3": f3, "f4": f4, "f5": f5, "f6": f6,
+            "total": total,
+            # evaluate() currently zeroes F2, and `total` above was
+            # computed as F(f1, 0.0, f3, f4, f5, f6) to match; the f2
+            # recorded here is the unmuted value, for reference only.
+            "f2_muted": True,
+        },
+        final_island_witnesses=len(island_witnesses),
+        final_component_witnesses=len(component_witnesses),
+    )
     print(f"Saved result to {path}")
 
 
