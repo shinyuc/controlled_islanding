@@ -5,7 +5,7 @@ utils, to keep the core algorithm free of I/O/reporting concerns.
 
 This module stays free of example-specific knowledge: anything that needs
 a case's weights (lambda_min per island, the faulty node/edge lists, the
-six cost terms) is computed by the run script and passed in as plain data.
+cost terms) is computed by the run script and passed in as plain data.
 save_result only serializes.
 """
 
@@ -21,7 +21,14 @@ from islanding.search import build_reconnected_components
 # utils/save.py -> utils/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-COST_KEYS = ("f1", "f2", "f3", "f4", "f5", "f6", "total", "f2_muted")
+# The caller passes these flat; the payload nests them into terms plus the
+# two totals, each stamped with its basis. F2 is absent: it was dropped from
+# the formulation, not muted, so there is nothing to record.
+COST_KEYS = (
+    "f1", "f3", "f4", "f5", "f6",
+    "economic_cost", "total_with_penalties", "K_phi", "K_psi",
+)
+_TERM_KEYS = ("f1", "f3", "f4", "f5", "f6")
 
 
 def save_result(
@@ -54,7 +61,15 @@ def save_result(
       aligned by INDEX with result.stable_islands and with the components
       rebuilt below, in that order. Computed by the caller via build_M,
       since only the caller knows the case's weights.
-    - `cost_terms`: dict with keys f1..f6, total, f2_muted.
+    - `cost_terms`: the five-term breakdown (F1, F3, F4, F5, F6 -- there
+      is no F2; it was dropped from the formulation) plus BOTH totals,
+      keyed as COST_KEYS. The two totals are recorded separately and stamped with
+      their basis, because only one of them is comparable across methods:
+      `economic_cost` (F1 + F3 - F4) involves no sample set at all, while
+      `total_with_penalties` adds F5/F6 and is therefore meaningless
+      without the `K_phi`/`K_psi` it was computed on. Those K's are the
+      INITIAL sample-set sizes; the solver's own `objective` carries
+      its own, larger K's wherever the run augmented.
     - the loop's two work counts (`inner_solve_count`,
       `augmentation_rounds`) and the sample-set sizes the objective was
       computed on (`final_K_phi`, `final_K_psi`), all read off the
@@ -129,7 +144,16 @@ def save_result(
         },
         "config": {key: _plain(value) for key, value in asdict(problem.config).items()},
         "reason": result.reason,
-        "objective": float(result.objective),
+        # Stamped like the two totals below, so its sample basis cannot be
+        # misread: this is the inner solver's own value, on the sample sets
+        # the FINAL inner solve ran on -- not the initial ones carried by
+        # cost.total_with_penalties.
+        "objective": {
+            "value": float(result.objective),
+            "sample_dependent": True,
+            "K_phi": result.final_K_phi,
+            "K_psi": result.final_K_psi,
+        },
         "inner_solve_count": result.inner_solve_count,
         "augmentation_rounds": result.augmentation_rounds,
         "total_witnesses_added": result.total_witnesses_added,
@@ -140,7 +164,19 @@ def save_result(
         # path the last pass's witnesses were added after the final solve.
         "final_K_phi": result.final_K_phi,
         "final_K_psi": result.final_K_psi,
-        "cost": {key: _plain(cost_terms[key]) for key in COST_KEYS},
+        "cost": {
+            "terms": {key: _plain(cost_terms[key]) for key in _TERM_KEYS},
+            "economic_cost": {
+                "value": _plain(cost_terms["economic_cost"]),
+                "sample_dependent": False,
+            },
+            "total_with_penalties": {
+                "value": _plain(cost_terms["total_with_penalties"]),
+                "sample_dependent": True,
+                "K_phi": _plain(cost_terms["K_phi"]),
+                "K_psi": _plain(cost_terms["K_psi"]),
+            },
+        },
         "stable_islands": [
             {"nodes": sorted(island), "lambda_min": float(lam)}
             for island, lam in zip(stable, island_lambda_min)

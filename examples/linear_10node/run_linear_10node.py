@@ -18,10 +18,12 @@ Use the `-m` form, not
 `python examples/linear_10node/run_linear_10node.py` -- that puts the repo
 root on sys.path so `examples.linear_10node.linear_10node` resolves.
 
-This script currently runs the EDGE_FAULTS setup (see SETUP below).
-examples/linear_10node/linear_10node.py also defines NODE_AND_EDGE_FAULTS;
-to run that scenario instead, change the setup passed to build_problem() in
-main() below (and update SETUP, which _lambda_min() also relies on).
+This script currently runs the NODE_AND_EDGE_FAULTS setup, as set by
+SETUP below. examples/linear_10node/linear_10node.py also defines
+EDGE_FAULTS; to run that scenario instead, change SETUP -- it feeds both
+build_problem() and _lambda_min(), so switching it is the only edit needed.
+run_baseline_10node.py has its own SETUP that must be changed to match, or
+the two methods are no longer being compared on the same instance.
 """
 
 import time
@@ -38,12 +40,18 @@ from islanding.outer_loop import solve
 from islanding.search import build_reconnected_components
 from islanding.counterexample import find_counterexamples_for_partition
 from islanding.cost import (
-    canon, f1_unstable_nodes, f2_unstable_edges, f3_operation_edges,
+    canon, f1_unstable_nodes, f3_operation_edges,
     f4_reconnection, f5_stability_penalty, f6_reconnection_stability, F,
 )
 
 # SETUP = EDGE_FAULTS
 SETUP = NODE_AND_EDGE_FAULTS
+
+# Labels result.objective in the report. The two methods' objectives are
+# the same function of the same partition, but each is evaluated on the
+# sample sets its own run finished with -- so the report names which
+# solver produced the number rather than presenting it as a bare "F".
+INNER_METHOD = "local search"
 
 
 def _lambda_min(nodes, edges):
@@ -133,22 +141,76 @@ def main():
 
     print("=== Cost ===")
     f1 = f1_unstable_nodes(unstable, problem.cost_data)
-    f2 = f2_unstable_edges(unstable, topology, problem.cost_data)
     f3 = f3_operation_edges(stable, unstable, topology, problem.cost_data, config)
     f4 = f4_reconnection(reconnected, problem.cost_data, config)
     f5 = f5_stability_penalty(stable, topology, problem.model, problem.samples_1, config)
     f6 = f6_reconnection_stability(
         stable, reconnected, topology, problem.model, problem.samples_2, config
     )
+    # `problem` is the un-augmented problem built at the top of main(), so
+    # these are the sample sets F5/F6 were just evaluated on. solve() grew
+    # its own internal copy; those final sizes are result.final_K_phi/psi.
+    initial_K_phi = len(problem.samples_1)
+    initial_K_psi = len(problem.samples_2)
+
     print(f"F1 (unstable nodes):      {f1}")
-    print(f"F2 (unstable edges):      {f2}  -- MUTED to 0.0 inside evaluate() "
-          f"(see islanding/evaluate.py); shown here for reference only")
     print(f"F3 (operation/cut edges): {f3}")
     print(f"F4 (reconnection reward): {f4}")
-    print(f"F5 (island stability):    {f5}")
-    print(f"F6 (reconnection stab.):  {f6}")
+    print(f"F5 (island stability):    {f5}   [samples_1, K_phi={initial_K_phi}]")
+    print(f"F6 (reconnection stab.):  {f6}   [samples_2, K_psi={initial_K_psi}]")
+    print()
+
+    # Two totals, because they support different comparisons.
+    #
+    # The economic cost depends on the partition alone -- no sample set
+    # enters it -- so the local search's and the MILP's are like-for-like.
+    #
+    # The penalised total is a DIAGNOSTIC. Both methods' F5/F6 are
+    # recomputed here on the same initial samples, so the two totals ARE
+    # comparable as scores on a common evaluation set. What they do not
+    # establish is an inner-solver optimality gap, or a like-for-like
+    # comparison of what each method actually optimised: the two converged
+    # after different numbers of augmentation rounds, so each selected its
+    # partition against a different sampled objective from the one scored
+    # here.
+    economic = F(f1, 0.0, f3, f4)
     total = F(f1, 0.0, f3, f4, f5, f6)
-    print(f"Total F (F2 muted):       {total}")
+    print(f"Economic cost (F1 + F3 - F4):    {economic}"
+          f"   -- sample-independent, comparable across methods")
+    print(f"Total with penalties (+F5 +F6):  {total}"
+          f"   -- on the INITIAL sample sets, K_phi={initial_K_phi}, "
+          f"K_psi={initial_K_psi}")
+    print()
+
+    # The inner solver's own value at the returned partition, on the sample
+    # sets as they stood for the FINAL inner solve.
+    print(f"{INNER_METHOD} objective: {result.objective}"
+          f"   (on the FINAL sample sets: K_phi={result.final_K_phi}, "
+          f"K_psi={result.final_K_psi})")
+    print(f"Total with penalties above: {total}"
+          f"   (on the INITIAL sample sets: K_phi={initial_K_phi}, "
+          f"K_psi={initial_K_psi})")
+    # Sample sets only ever grow by appending, so equal K's mean the final
+    # inner solve ran on the same arrays used above. That is all this
+    # condition establishes -- NOT that no augmentation happened: a run
+    # capped at one outer iteration can solve, find witnesses, append them,
+    # and return an objective computed before that augmentation, leaving
+    # the K's equal. result.augmentation_rounds, printed in the Solve
+    # section, is what answers the augmentation question.
+    if (result.final_K_phi, result.final_K_psi) == (initial_K_phi, initial_K_psi):
+        print(
+            "  Both values were computed on the same sample sets, so they "
+            "are the same quantity and must agree."
+        )
+    else:
+        print(
+            "  These two are NOT comparable, and their difference is not the\n"
+            "  witnesses' contribution. The objective is a sample average, so\n"
+            "  augmentation changes numerator and denominator together --\n"
+            "  A/K becomes (A+B)/(K+m), reweighting every original sample. The\n"
+            "  augmented objective can even fall despite adding positive\n"
+            "  violations."
+        )
     print()
 
     print("=== Stability check ===")
@@ -189,12 +251,13 @@ def main():
         island_lambda_min=island_lambda_min,
         component_lambda_min=component_lambda_min,
         cost_terms={
-            "f1": f1, "f2": f2, "f3": f3, "f4": f4, "f5": f5, "f6": f6,
-            "total": total,
-            # evaluate() currently zeroes F2, and `total` above was
-            # computed as F(f1, 0.0, f3, f4, f5, f6) to match; the f2
-            # recorded here is the unmuted value, for reference only.
-            "f2_muted": True,
+            "f1": f1, "f3": f3, "f4": f4, "f5": f5, "f6": f6,
+            # Recorded separately, each with its basis: only the economic
+            # cost is comparable across methods, and the penalised total
+            # is meaningless without the K it was computed on.
+            "economic_cost": economic,
+            "total_with_penalties": total,
+            "K_phi": initial_K_phi, "K_psi": initial_K_psi,
         },
         final_island_witnesses=len(island_witnesses),
         final_component_witnesses=len(component_witnesses),
