@@ -12,6 +12,7 @@ from examples.linear_30node.linear_30node_topology import (
 )
 from examples.linear_30node.builder import (
     LINEAR_30, build_topology, build_M, build_problem, faulty_nodes,
+    faulty_edges,
 )
 from examples.linear_30node.config import build_config
 
@@ -49,20 +50,48 @@ def test_full_system_is_genuinely_unstable():
     assert lambda_min <= 0
 
 
-def test_faults_are_real():
-    nodes = faulty_nodes(LINEAR_30)
-    assert len(nodes) == 4
+def test_faults_are_placed_where_intended():
+    # Unlike the 20-/50-node cases, faults here are placed explicitly
+    # (generate_linear_30node.py's FAULTY_NODES/FAULTY_EDGES), so the exact
+    # identities are part of the fixture, not an artifact of "first n nodes".
+    assert faulty_nodes(LINEAR_30) == [5, 16]
+    assert faulty_edges(LINEAR_30) == [(10, 25), (11, 25), (12, 24), (18, 24)]
 
+
+def test_faults_are_real():
     neighbors = {node: set() for node in NODES}
     for u, v in EDGES:
         neighbors[u].add(v)
         neighbors[v].add(u)
 
-    for node in nodes:
+    # Each faulty node is unstable in EVERY island: its diagonal is
+    # non-positive even at full original-graph coupling.
+    for node in faulty_nodes(LINEAR_30):
         diagonal = NODE_WEIGHTS[node] + sum(
             EDGE_WEIGHTS[_canon((node, j))] for j in neighbors[node]
         )
         assert diagonal < 0 + 1e-9
+
+    # Each faulty edge is strongly negative, so any island holding both
+    # endpoints is unstable and the edge has to be cut.
+    for edge in faulty_edges(LINEAR_30):
+        assert EDGE_WEIGHTS[edge] == -20.0
+
+
+def test_reconnection_candidate_survives_the_cut():
+    # The placement's whole purpose: the four faulty edges are four of the
+    # five crossing edges between the upper cluster {9,10,11,12,18,27,28}
+    # and the rest, leaving (11,22) as the only healthy link across. That
+    # is what can give the search two stable islands with an eligible cut
+    # edge between them -- the precondition for a non-empty E^rec.
+    upper = {9, 10, 11, 12, 18, 27, 28}
+    crossing = sorted(
+        _canon((u, v)) for u, v in EDGES if (u in upper) != (v in upper)
+    )
+    assert crossing == [(10, 25), (11, 22), (11, 25), (12, 24), (18, 24)]
+
+    healthy = [edge for edge in crossing if EDGE_WEIGHTS[edge] > 0]
+    assert healthy == [(11, 22)]
 
 
 def test_build_problem_draws_matching_sample_shapes():
