@@ -407,36 +407,7 @@ def test_f6_node_indexing_uses_global_not_island_local_order():
     assert f6 == pytest.approx(0.2625)
 
 
-def _synthetic_edge_energy_model(base_model):
-    """Spec section 16b's synthetic model -- TEST FIXTURE ONLY.
-
-    Not a physical system model, so it lives here rather than beside
-    linear_consensus_model in islanding/cost.py. Its only purpose is to
-    make W_ij nonzero, which is what brings Psi_r's Parts 2 and 3 to life;
-    on linear consensus both are identically zero and untestable.
-
-    Derived from `base_model` by swapping exactly two callables, so the
-    dynamics (f_i, f_ij), the node energy (W_i, grad_W_i), the sampler and
-    the inflation rule are the linear-consensus ones, closed over the same
-    node/edge weights. Any deviation from section 16's result is therefore
-    attributable purely to the edge-energy terms.
-
-        W_ij(i, j, x_i, x_j)      = 0.5 * (x_i - x_j)^2       (c = 1)
-        grad_W_ij(i, j, x_i, x_j) = (x_i - x_j, -(x_i - x_j))
-    """
-
-    def W_ij(i, j, x_i, x_j):
-        delta = x_i - x_j
-        return 0.5 * float(np.dot(delta, delta))
-
-    def grad_W_ij(i, j, x_i, x_j):
-        delta = x_i - x_j
-        return (delta, -delta)
-
-    return replace(base_model, W_ij=W_ij, grad_W_ij=grad_W_ij)
-
-
-def test_f6_all_four_parts_with_nonzero_edge_energy():
+def test_f6_all_four_parts_with_nonzero_edge_energy(synthetic_edge_energy_model):
     # Hand-traced ground truth from spec section 16b: the section 16 fixture
     # with ONLY the model swapped, so every difference from 0.2625 comes
     # from the W_ij terms.
@@ -456,7 +427,7 @@ def test_f6_all_four_parts_with_nonzero_edge_energy():
     # collapses F6 to 0. Section 16's linear fixture cannot detect a wrong
     # Part 2 or 3 at all, since both are identically zero there.
     topology, linear_model, config, stable_islands, reconnected_edges = _f6_fixture()
-    model = _synthetic_edge_energy_model(linear_model)
+    model = synthetic_edge_energy_model(linear_model)
     samples = _f6_traced_samples()
 
     f6 = f6_reconnection_stability(
