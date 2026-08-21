@@ -69,10 +69,24 @@ def main():
 
     print("=== Solve ===")
     print(f"reason:                     {result.reason}")
-    print(f"outer_iterations:           {result.outer_iterations}")
+    # Two counts, not one: they differ by one when the loop converges (the
+    # final solve found nothing to add) and are equal when it hits the cap.
+    print(f"inner solves:               {result.inner_solve_count}")
+    print(f"augmentation rounds:        {result.augmentation_rounds}")
     print(f"total witnesses added:      {result.total_witnesses_added}")
     print(f"  island witnesses (F5):    {result.total_island_witnesses_added}")
     print(f"  component witnesses (F6): {result.total_component_witnesses_added}")
+    # The sample sets the objective below was actually computed on. On the
+    # cap path these are SMALLER than initial P + total witnesses added:
+    # the last pass's witnesses were appended after the final solve.
+    print(f"final sample counts:        K_phi = {result.final_K_phi}, "
+          f"K_psi = {result.final_K_psi}")
+    if result.reason == "max_outer_iterations":
+        print(
+            "  NOTE: hit the outer cap. The reported objective belongs to "
+            "the PRE-augmentation sample sets shown above -- the final "
+            "pass's witnesses were added but never solved against."
+        )
     print(f"runtime (s):                {elapsed:.3f}")
     print()
 

@@ -19,15 +19,37 @@ from islanding.counterexample import find_counterexamples_for_partition
 @dataclass(frozen=True)
 class SolveResult:
     objective: float
-    outer_iterations: int
+    # How much work the loop did, as two separate counts. One number
+    # cannot serve both exit paths: the loop does N inner solves and
+    # either N-1 augmentations (converged -- the last solve found no
+    # counterexample, so nothing followed it) or N (cap reached -- the
+    # last solve's witnesses were added, and then the loop ran out of
+    # passes before re-solving). Reporting a single "iterations" figure
+    # therefore means different things depending on how the loop exited.
+    inner_solve_count: int      # times inner_solver was actually called
+    augmentation_rounds: int    # times the sample sets were grown
     # Running totals over every outer pass, split by side so it is visible
     # whether the island side (F5) or the component side (F6) is driving
     # the iteration. These are cumulative counts of witnesses ADDED to the
     # sample sets -- not the final check on the returned partition, which
     # is zero on both sides whenever reason == "converged".
+    #
+    # On the cap path these totals OVERCOUNT what `objective` saw: the
+    # final allowed pass finds witnesses and appends them, then the loop
+    # exits without re-solving. Use final_K_phi/final_K_psi below for the
+    # sample sets the returned objective was actually computed on.
     total_witnesses_added: int
     total_island_witnesses_added: int
     total_component_witnesses_added: int
+    # Sizes of the sample sets the RETURNED objective was computed on:
+    # len(samples_1) and len(samples_2) of the Problem handed to the final
+    # inner solve. Recorded rather than left to be reconstructed, because
+    # on the cap path "initial P + total_witnesses_added" overshoots by the
+    # last pass's witnesses, which were added but never solved against.
+    # K_phi is the F5/Phi side (samples_1), K_psi the F6/Psi side
+    # (samples_2); the two grow independently, so they differ in general.
+    final_K_phi: int
+    final_K_psi: int
     reason: str  # "converged" | "max_outer_iterations"
     stable_islands: list       # list[frozenset] -- the set S
     unstable_islands: list     # list[frozenset] -- the set U
@@ -56,14 +78,26 @@ def _augment(problem, island_witnesses, component_witnesses):
     return replace(problem, samples_1=samples_1, samples_2=samples_2, config=config)
 
 
-def _solve_result(inner, outer_iterations, island_added, component_added, reason):
-    """Lift an inner solver's InnerResult into a SolveResult."""
+def _solve_result(
+    inner, solved_on, inner_solve_count, augmentation_rounds,
+    island_added, component_added, reason,
+):
+    """Lift an inner solver's InnerResult into a SolveResult.
+
+    `solved_on` is the Problem the final inner solve ran on -- the basis of
+    `inner.objective`. It must be the PRE-augmentation problem on the cap
+    path, so the caller passes it explicitly rather than letting this
+    reach for whatever the loop variable happens to hold.
+    """
     return SolveResult(
         objective=inner.objective,
-        outer_iterations=outer_iterations,
+        inner_solve_count=inner_solve_count,
+        augmentation_rounds=augmentation_rounds,
         total_witnesses_added=island_added + component_added,
         total_island_witnesses_added=island_added,
         total_component_witnesses_added=component_added,
+        final_K_phi=len(solved_on.samples_1),
+        final_K_psi=len(solved_on.samples_2),
         reason=reason,
         stable_islands=inner.stable_islands,
         unstable_islands=inner.unstable_islands,
@@ -85,10 +119,17 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
     inner solver that takes no such argument (a MILP) is therefore never
     handed one. local_search re-initializes its own tree on every later
     pass, so nothing but the (growing) sample sets carries between passes.
+
+    `max_outer_iterations` caps the number of INNER SOLVES, which is what
+    the loop variable counts -- not the number of augmentations, which is
+    one fewer whenever the loop converges. See SolveResult for why the two
+    are reported separately.
     """
     current = problem
     island_added = 0
     component_added = 0
+    inner_solve_count = 0
+    augmentation_rounds = 0
 
     for outer in range(max_outer_iterations):
         warm_start = (
@@ -97,6 +138,12 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
             else {}
         )
         result = inner_solver(current, **warm_start)
+        inner_solve_count += 1
+        # The problem `result.objective` was computed on. Captured before
+        # the augmentation below, because on the cap path the loop exits
+        # AFTER growing the sample sets one last time and that growth is
+        # not reflected in the objective being returned.
+        solved_on = current
 
         # .get() rather than []: an inner solver need not report a reason
         # (a MILP's info carries different keys).
@@ -112,15 +159,23 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
         )
 
         if not island_witnesses and not component_witnesses:
+            # This solve found nothing to add, so no augmentation follows
+            # it: the two counts differ by one on this path.
             return _solve_result(
-                result, outer, island_added, component_added, "converged"
+                result, solved_on, inner_solve_count, augmentation_rounds,
+                island_added, component_added, "converged",
             )
 
         island_added += len(island_witnesses)
         component_added += len(component_witnesses)
+        augmentation_rounds += 1
         current = _augment(current, island_witnesses, component_witnesses)
 
+    # Cap path. The final pass augmented and then ran out of iterations, so
+    # inner_solve_count == augmentation_rounds == max_outer_iterations, and
+    # the witnesses from that last pass were never solved against -- which
+    # is exactly why `solved_on` is the pre-augmentation problem.
     return _solve_result(
-        result, max_outer_iterations, island_added, component_added,
-        "max_outer_iterations",
+        result, solved_on, inner_solve_count, augmentation_rounds,
+        island_added, component_added, "max_outer_iterations",
     )

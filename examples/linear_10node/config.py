@@ -26,6 +26,7 @@ alpha = 3 because it reaches the same optimum in half the outer passes.
 """
 
 from islanding.cost import AlgorithmConfig
+from baseline.config import MILPConfig
 
 ALPHA = 5.0  # see the sweep in this module's docstring
 
@@ -37,3 +38,28 @@ def build_config():
         alpha_2=ALPHA, gamma=1.0, k_2=0.1, P_2=20,
         epsilon=0.01, max_iterations=100, swap_supernode_edges=True,
     )
+
+
+def build_milp_config():
+    """Solver mechanics for the MILP baseline on THIS case.
+
+    Lives beside build_config() for the same reason the AlgorithmConfig
+    does: the values a case actually ran with stay auditable in one place.
+    It is kept as a separate builder because it carries nothing about what
+    is being minimised -- only how the solver goes about it -- so the two
+    methods still share build_config() and cannot drift apart.
+
+    time_limit is a PER-CASE choice: how long the MILP needs scales with
+    instance size (node and edge count, and through the certificate
+    families with P_1/P_2 as well), so it cannot be set once globally.
+    300 s is generous for 10 nodes -- the solve closes the gap well inside
+    it -- and larger cases should raise it rather than inherit this number.
+    Note the limit applies PER OUTER PASS, not to the whole run: solve()
+    calls the inner MILP once per pass.
+
+    mip_gap = 1e-6 is tight on purpose. The outer loop reads the returned
+    partition as if it were the inner optimum, so a loose gap would let
+    solver slack, rather than the sampled stability constraints, decide
+    which partition each pass hands back.
+    """
+    return MILPConfig(time_limit=300.0, mip_gap=1e-6, verbose=False)

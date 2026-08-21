@@ -55,6 +55,11 @@ def save_result(
       rebuilt below, in that order. Computed by the caller via build_M,
       since only the caller knows the case's weights.
     - `cost_terms`: dict with keys f1..f6, total, f2_muted.
+    - the loop's two work counts (`inner_solve_count`,
+      `augmentation_rounds`) and the sample-set sizes the objective was
+      computed on (`final_K_phi`, `final_K_psi`), all read off the
+      SolveResult -- see islanding/outer_loop.py for why one iteration
+      count could not stand for both.
     - the full AlgorithmConfig, without which the numbers above cannot be
       interpreted (alpha and P in particular change what F5/F6 mean).
 
@@ -125,10 +130,16 @@ def save_result(
         "config": {key: _plain(value) for key, value in asdict(problem.config).items()},
         "reason": result.reason,
         "objective": float(result.objective),
-        "outer_iterations": result.outer_iterations,
+        "inner_solve_count": result.inner_solve_count,
+        "augmentation_rounds": result.augmentation_rounds,
         "total_witnesses_added": result.total_witnesses_added,
         "total_island_witnesses_added": result.total_island_witnesses_added,
         "total_component_witnesses_added": result.total_component_witnesses_added,
+        # Sample-set sizes the recorded `objective` was computed on. Do not
+        # reconstruct these as initial P + total_witnesses_added: on the cap
+        # path the last pass's witnesses were added after the final solve.
+        "final_K_phi": result.final_K_phi,
+        "final_K_psi": result.final_K_psi,
         "cost": {key: _plain(cost_terms[key]) for key in COST_KEYS},
         "stable_islands": [
             {"nodes": sorted(island), "lambda_min": float(lam)}
