@@ -56,14 +56,27 @@ def _relay_addition_candidates(tree, topology):
     return candidates
 
 
-def _supernode_addition_candidates(topology, swap_supernode_edges):
-    """Family 2: (SOURCE, i) or (SINK, i) for any node i, when enabled."""
+def _supernode_addition_candidates(tree, topology, swap_supernode_edges):
+    """Family 2: (SOURCE, i) or (SINK, i) for any node i, when enabled.
+
+    Edges already in `tree` are skipped. Without that filter the pair
+    "remove (SOURCE, i), add (SOURCE, i)" passes the feasibility test in
+    _feasible_swaps -- removing the edge does put its endpoints in
+    different components -- and rebuilds the tree unchanged. Epsilon > 0
+    means such a swap can never be ACCEPTED, so nothing downstream sees a
+    different answer, but each one costs a full objective evaluation, and
+    the enumerated neighbourhood would not be the one the spec describes.
+
+    Family 1 needs no equivalent filter: _relay_addition_candidates only
+    ever proposes the leg that is missing from the tree.
+    """
     if not swap_supernode_edges:
         return []
     candidates = []
     for node in topology.nodes():
-        candidates.append((SOURCE, node))
-        candidates.append((SINK, node))
+        for edge in ((SOURCE, node), (SINK, node)):
+            if not tree.has_edge(*edge):
+                candidates.append(edge)
     return candidates
 
 
@@ -72,15 +85,21 @@ def _feasible_swaps(tree, topology, swap_supernode_edges):
 
     For each removal candidate, removing it from the tree splits it into
     exactly two components (a tree property). An addition is feasible for
-    that removal iff its endpoints land in different components -- this
-    also automatically excludes any addition edge already present in the
-    tree, since such an edge's endpoints are trivially still connected
-    (through itself) after removing a different edge.
+    that removal iff its endpoints land in different components -- which
+    excludes any addition edge already present in the tree, since such an
+    edge's endpoints are trivially still connected (through itself) after
+    removing a DIFFERENT edge.
+
+    That last qualifier is why the candidate lists must not offer an edge
+    the tree already has: when the addition IS the removal, the component
+    test sees the two endpoints correctly separated and accepts a pair
+    that rebuilds the original tree. Both candidate generators exclude
+    present edges, so every pair enumerated here changes the tree.
     """
     removals = _removal_candidates(tree, swap_supernode_edges)
     additions = (
         _relay_addition_candidates(tree, topology)
-        + _supernode_addition_candidates(topology, swap_supernode_edges)
+        + _supernode_addition_candidates(tree, topology, swap_supernode_edges)
     )
 
     swaps = []

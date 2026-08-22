@@ -155,7 +155,21 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
     history behind it). A caller recording that failure must use the
     attached `outer_state`, not the problem it originally passed in: after
     even one augmentation the two describe different sample sets.
+
+    `max_outer_iterations` must be at least 1. Rejected rather than
+    accommodated: with a cap of zero the loop body never runs, so there is
+    no partition, no objective and no sample basis to report, and any
+    SolveResult invented for that case would be a record of a run that
+    never happened. (This used to fall through to the cap-return path and
+    raise UnboundLocalError on the unbound `result`.)
     """
+    if max_outer_iterations < 1:
+        raise ValueError(
+            f"max_outer_iterations must be at least 1; got "
+            f"{max_outer_iterations!r}. The loop has nothing to return "
+            "without at least one inner solve."
+        )
+
     current = problem
     island_added = 0
     component_added = 0

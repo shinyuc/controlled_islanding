@@ -320,3 +320,24 @@ def test_the_solvers_own_diagnostics_survive_enrichment():
 
     assert caught.value.info["status"] == "TIME_LIMIT"
     assert "no feasible solution" in str(caught.value)
+
+
+def test_a_cap_below_one_is_rejected(two_node_problem):
+    # The loop body never runs at a cap of zero, so `result` and
+    # `solved_on` stay unbound and the cap-return path used to raise
+    # UnboundLocalError. Rejected explicitly instead: a run that never
+    # solved has no partition, objective or sample basis to report, so
+    # there is no honest SolveResult to invent for it.
+    for cap in (0, -1):
+        with pytest.raises(ValueError, match="at least 1"):
+            solve(two_node_problem, max_outer_iterations=cap)
+
+
+def test_a_cap_of_one_is_still_allowed(two_node_problem):
+    # The boundary stays open -- one pass is a legitimate run, and is what
+    # the cap-path tests above rely on.
+    result = solve(two_node_problem, max_outer_iterations=1,
+                   inner_solver=_scripted_solver([_MERGED]))
+
+    assert result.inner_solve_count == 1
+    assert result.reason == "converged"

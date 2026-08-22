@@ -13,7 +13,9 @@ from islanding.topology import Topology
 from islanding.augmented import SOURCE, SINK
 from islanding.cost import CostData, AlgorithmConfig, linear_consensus_model
 from islanding.evaluate import Problem
-from islanding.local_search import local_search
+from islanding.augmented import augmented_graph
+from islanding.search import initial_spanning_tree
+from islanding.local_search import local_search, _feasible_swaps
 
 
 def _fixture():
@@ -137,3 +139,114 @@ def test_local_search_from_a2_reaches_zero_in_one_swap():
     assert result.objective == pytest.approx(0.0, abs=1e-9)
     assert result.info["reason"] == "zero_objective"
     assert result.info["iterations"] == 1
+
+
+# ---------------------------------------------------------------------------
+# The enumerated neighbourhood contains no no-op swaps
+# ---------------------------------------------------------------------------
+
+def _tree_key(tree):
+    return frozenset(frozenset(edge) for edge in tree.edges())
+
+
+_SWAP_TOPOLOGIES = [
+    Topology(nodes=[1, 2], edges=[(1, 2)]),
+    Topology(nodes=[1, 2, 3], edges=[(1, 2), (2, 3)]),
+    Topology(nodes=[1, 2, 3], edges=[(1, 2), (2, 3), (1, 3)]),
+    Topology(nodes=[1, 2, 3, 4], edges=[(1, 2), (1, 3), (1, 4)]),
+]
+_SWAP_IDS = ["two_node_edge", "three_node_path", "triangle", "star"]
+
+
+@pytest.mark.parametrize("topology", _SWAP_TOPOLOGIES, ids=_SWAP_IDS)
+def test_no_enumerated_swap_rebuilds_the_same_tree(topology):
+    # "remove (SOURCE, i), add (SOURCE, i)" used to pass the feasibility
+    # test -- removing the edge really does separate its endpoints -- and
+    # returned the original tree. Epsilon > 0 meant it could never be
+    # accepted, so no result changed, but each one cost a full objective
+    # evaluation and the neighbourhood was not the one the spec describes.
+    tree = initial_spanning_tree(augmented_graph(topology))
+    original = _tree_key(tree)
+
+    for removal, addition in _feasible_swaps(tree, topology, True):
+        swapped = tree.copy()
+        swapped.remove_edge(*removal)
+        swapped.add_edge(*addition)
+
+        assert _tree_key(swapped) != original, (
+            f"swap remove={removal} add={addition} rebuilds the same tree"
+        )
+
+
+@pytest.mark.parametrize("topology", _SWAP_TOPOLOGIES, ids=_SWAP_IDS)
+def test_no_swap_adds_an_edge_the_tree_already_has(topology):
+    # The direct form of the same rule, and the one the candidate
+    # generators enforce.
+    tree = initial_spanning_tree(augmented_graph(topology))
+
+    for removal, addition in _feasible_swaps(tree, topology, True):
+        assert not tree.has_edge(*addition), (
+            f"addition {addition} is already in the tree"
+        )
+        assert set(removal) != set(addition)
+
+
+@pytest.mark.parametrize("topology", _SWAP_TOPOLOGIES, ids=_SWAP_IDS)
+def test_filtering_removes_only_no_ops_and_no_genuine_swap(topology):
+    # The guarantee that matters: filtering must not shrink the set of
+    # trees reachable in one step. Recomputed here from the UNFILTERED
+    # candidate set, so this compares the two neighbourhoods directly
+    # rather than trusting that only no-ops were dropped.
+    tree = initial_spanning_tree(augmented_graph(topology))
+    original = _tree_key(tree)
+
+    filtered = _feasible_swaps(tree, topology, True)
+    reachable = {
+        _tree_key(_apply(tree, removal, addition))
+        for removal, addition in filtered
+    }
+
+    unfiltered_reachable = set()
+    for removal, addition in _unfiltered_swaps(tree, topology):
+        result = _tree_key(_apply(tree, removal, addition))
+        if result != original:          # the no-ops, which we mean to drop
+            unfiltered_reachable.add(result)
+
+    assert reachable == unfiltered_reachable
+    # ...and every enumerated pair now leads somewhere distinct.
+    assert len(reachable) == len(filtered)
+
+
+def _apply(tree, removal, addition):
+    swapped = tree.copy()
+    swapped.remove_edge(*removal)
+    swapped.add_edge(*addition)
+    return swapped
+
+
+def _unfiltered_swaps(tree, topology):
+    """The pre-fix enumeration: every supernode edge offered, filtered or not."""
+    import networkx as nx
+
+    from islanding.local_search import (
+        _removal_candidates, _relay_addition_candidates,
+    )
+
+    additions = list(_relay_addition_candidates(tree, topology))
+    for node in topology.nodes():
+        additions.append((SOURCE, node))
+        additions.append((SINK, node))
+
+    swaps = []
+    for removal in _removal_candidates(tree, True):
+        remainder = tree.copy()
+        remainder.remove_edge(*removal)
+        component_of = {}
+        for index, component in enumerate(nx.connected_components(remainder)):
+            for node in component:
+                component_of[node] = index
+        for addition in additions:
+            u, v = addition
+            if component_of.get(u) != component_of.get(v):
+                swaps.append((removal, addition))
+    return swaps
