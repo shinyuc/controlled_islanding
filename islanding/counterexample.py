@@ -2,8 +2,10 @@
 
 See docs/counterexample_spec.md for the full specification. The linear
 method builds M = D + L for a unit and returns zero-padded, boundary-
-scaled eigenvectors for every non-positive eigenvalue -- genuine
-instabilities, as opposed to F5/F6's weaker k_1/k_2-decay-rate hinge.
+scaled eigenvectors for every eigenvalue at or below the config's
+stability_tolerance -- genuine instabilities, as opposed to F5/F6's
+weaker k_1/k_2-decay-rate hinge. See _find on why the test carries a
+tolerance rather than comparing against zero exactly.
 
 Deliberately does not import islanding.cost (which imports this module to
 wire counterexample=linear_counterexample(...) into linear_consensus_model)
@@ -26,17 +28,30 @@ def linear_counterexample(node_weights, edge_weights):
     """SystemModel.counterexample for grounded linear consensus.
 
     M_u = D_u + L_u over a unit's node/edge set (size |V_u|, independent
-    of d); every eigenvalue <= 0 (M_u symmetric since w_ij = w_ji) is a
-    genuine instability. Because the dynamics decouple per coordinate
-    (dot_x = -(M_u kron I_d) x), M_u's eigenvalues repeat d times but
-    never change, so the stability criterion -- and the count of
-    witnesses, one per non-positive eigenvalue -- is independent of d.
+    of d); every eigenvalue <= `stability_tolerance` (M_u symmetric since
+    w_ij = w_ji) is a genuine instability. Because the dynamics decouple
+    per coordinate (dot_x = -(M_u kron I_d) x), M_u's eigenvalues repeat d
+    times but never change, so the stability criterion -- and the count of
+    witnesses, one per eigenvalue at or below the tolerance -- is
+    independent of d.
     Each witness places its eigenvector, zero-padded to node_order, into
     coordinate 0 of an (n, d) array (all other coordinates zero) and
     scales the whole array so its Frobenius norm equals threshold_radius.
+
+    `stability_tolerance` arrives as a CALL ARGUMENT, alongside
+    threshold_radius, rather than being closed over by this factory. Both
+    are config-derived numbers, and the existing split already puts those
+    on the call: threshold_radius is computed by the caller from
+    beta/gamma and the inflation factor. Keeping the tolerance there too
+    means linear_consensus_model needs no config to build a model, one
+    model stays reusable across configs, and a model copied with
+    dataclasses.replace (as the tests' synthetic edge-energy model is)
+    cannot silently carry a stale tolerance. The cost is one more
+    parameter on the SystemModel.counterexample interface.
     """
 
-    def _find(unit_nodes, unit_edges, node_order, d, threshold_radius):
+    def _find(unit_nodes, unit_edges, node_order, d, threshold_radius,
+              stability_tolerance):
         unit_nodes = list(unit_nodes)
         index = {node: i for i, node in enumerate(unit_nodes)}
         size = len(unit_nodes)
@@ -60,7 +75,21 @@ def linear_counterexample(node_weights, edge_weights):
 
         witnesses = []
         for k, lam in enumerate(eigenvalues):
-            if lam > 0:
+            # The criterion is lambda <= 0, but the TEST is
+            # lambda <= stability_tolerance. eigh returns a structurally
+            # zero eigenvalue as a small value of either sign, and M_u is
+            # Laplacian-like, so such zeros are the normal case rather than
+            # a corner one. Under an exact `lam > 0` test a genuinely
+            # marginal unit is classified stable, the search reports no
+            # witness, and the outer loop converges on a false stability
+            # claim -- a silent correctness failure.
+            #
+            # The trade runs one way on purpose. A weakly positive
+            # eigenvalue is now reported as a witness, so the search may
+            # keep working on a unit that is technically stable: the cost
+            # is extra outer iterations and a slightly larger sample set.
+            # The failure it replaces cost correctness, and left no trace.
+            if lam > stability_tolerance:
                 continue
 
             padded = np.zeros((n, d))
@@ -125,14 +154,18 @@ def find_counterexamples_for_partition(stable_islands, reconnected_edges, proble
             if u in island and v in island
         }
         island_witnesses.extend(
-            model.counterexample(island, island_edges, node_order, d, island_radius)
+            model.counterexample(
+                island, island_edges, node_order, d, island_radius,
+                config.stability_tolerance,
+            )
         )
 
     component_witnesses = []
     for component in components:
         component_witnesses.extend(
             model.counterexample(
-                component.nodes(), component.edges(), node_order, d, component_radius
+                component.nodes(), component.edges(), node_order, d,
+                component_radius, config.stability_tolerance,
             )
         )
 

@@ -367,7 +367,8 @@ def _order_sensitive_mock_model():
     def inflation(topology):
         return 0.0
 
-    def counterexample(unit_nodes, unit_edges, node_order, d, threshold_radius):
+    def counterexample(unit_nodes, unit_edges, node_order, d, threshold_radius,
+                       stability_tolerance):
         return []
 
     return SystemModel(

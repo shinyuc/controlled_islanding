@@ -104,6 +104,20 @@ class AlgorithmConfig:
     epsilon: float = 0.01
     max_iterations: int = 100
     swap_supernode_edges: bool = True
+    # Eigenvalues <= this count as instabilities in the counterexample
+    # search (islanding/counterexample.py). The mathematical criterion is
+    # lambda <= 0, but eigh returns a structurally zero eigenvalue as a
+    # small value of either sign, and Laplacian-like M_u matrices have such
+    # zeros by construction -- so an exact `lambda > 0` test silently
+    # classifies a marginally unstable unit as stable, and the outer loop
+    # then reports "converged" on a false stability claim.
+    #
+    # PER-CASE, like the time limit: the conditioning of M_u worsens with
+    # unit size and weight spread, so the size of the numerical noise
+    # around a true zero is instance-dependent. 1e-9 is a starting point
+    # for the small cases here, not a universal constant. Appended at the
+    # end of the field list so no positional construction shifts.
+    stability_tolerance: float = 1e-9
 
     def __post_init__(self):
         # Finiteness first: every comparison below returns False on a NaN,
@@ -113,7 +127,8 @@ class AlgorithmConfig:
         # -- an infinite sampling radius or improvement threshold makes the
         # objective just as undefined -- so all nine are checked here.
         for name in ("kappa_op", "kappa_rec", "alpha_1", "alpha_2",
-                     "beta", "gamma", "k_1", "k_2", "epsilon"):
+                     "beta", "gamma", "k_1", "k_2", "epsilon",
+                     "stability_tolerance"):
             _require_finite(name, getattr(self, name))
 
         if not self.kappa_op > self.kappa_rec:
@@ -150,6 +165,13 @@ class AlgorithmConfig:
         # max_iterations == 0 is a legal, meaningful config (immediate stop
         # with reason="max_iterations"), exercised by local_search_spec.md
         # section 7 assertion 4 -- so this is >= 0, not strictly positive.
+        # >= 0, not > 0: zero is meaningful and recovers the exact
+        # `lambda <= 0` criterion for a caller that wants it.
+        if not self.stability_tolerance >= 0:
+            raise ValueError(
+                f"stability_tolerance must be nonnegative; got "
+                f"{self.stability_tolerance!r}"
+            )
         if not self.max_iterations >= 0:
             raise ValueError(
                 f"max_iterations must be nonnegative; got "
@@ -220,7 +242,8 @@ class SystemModel:
         grad_W_ij(i, j, x_i, x_j) -> (d/dx_i, d/dx_j)   gradient, both endpoints
         sampler(threshold, P1, n, d) -> (P1, n, d) array
         inflation(topology) -> float
-        counterexample(unit_nodes, unit_edges, node_order, d, threshold_radius)
+        counterexample(unit_nodes, unit_edges, node_order, d,
+                       threshold_radius, stability_tolerance)
             -> list of (n, d) witness arrays
 
     Linear consensus's Lyapunov terms (W_i, W_ij, grad_W_i, grad_W_ij) are
