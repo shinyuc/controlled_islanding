@@ -2,43 +2,27 @@
 docs/outer_loop_spec.md section 6 (w_1=-1, w_2=3, w_12=3, beta=gamma=1).
 """
 
+import json
+
+import pytest
+
 import networkx as nx
 import numpy as np
 
-from islanding.topology import Topology
 from islanding.augmented import SOURCE, SINK
-from islanding.cost import CostData, AlgorithmConfig, linear_consensus_model
-from islanding.evaluate import Problem
 from islanding.counterexample import find_counterexamples_for_partition
-from islanding.inner import InnerResult
+from islanding.inner import InnerResult, InnerSolveFailure
 from islanding.outer_loop import solve, _augment
+from conftest import build_two_node_problem
 
 
 def _fixture():
-    topology = Topology(nodes=[1, 2], edges=[(1, 2)])
+    """The shared 2-node problem, built fresh per call.
 
-    node_weights = {1: -1.0, 2: 3.0}
-    edge_weights = {(1, 2): 3.0}
-    model = linear_consensus_model(node_weights, edge_weights)
-
-    cost_data = CostData(node_costs={1: 1, 2: 1}, edge_costs={(1, 2): 1})
-
-    config = AlgorithmConfig(
-        kappa_op=1.0, kappa_rec=0.7,
-        alpha_1=1.0, beta=1.0, k_1=0.2, P_1=1,
-        alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
-    )
-
-    # Single sample point x = (1, 0) -- NOT the node-1 witness (sqrt(2), 0):
-    # same direction, different magnitude, so it is not literally present
-    # in the initial sample sets.
-    samples = np.array([[[1.0], [0.0]]])
-
-    problem = Problem(
-        topology=topology, model=model, cost_data=cost_data, config=config,
-        samples_1=samples, samples_2=samples,
-    )
-    return problem
+    Defined in tests/conftest.py so tests/test_baseline.py can use it too
+    without importing across test modules -- see that file for why.
+    """
+    return build_two_node_problem()
 
 
 def _n(i, j, endpoint):
@@ -80,6 +64,13 @@ def test_solve_converges_to_a_genuinely_stable_tree():
     )
     assert island_witnesses == []
     assert component_witnesses == []
+
+    # pass_history is written to JSON by utils.save, and local_search parks
+    # a networkx tree in its info dict -- so the filtering has to hold on a
+    # REAL solver, not just the stubs below.
+    assert len(result.pass_history) == result.inner_solve_count
+    assert all("tree" not in entry for entry in result.pass_history)
+    json.dumps(result.pass_history)   # raises if anything non-scalar leaked
 
 
 def test_augment_grows_island_samples_and_leaves_components_unchanged():
@@ -194,6 +185,13 @@ def test_convergence_path_reports_one_more_solve_than_augmentation():
     assert result.total_component_witnesses_added == 3
     assert result.total_witnesses_added == 6
 
+    # One entry per inner solve, including the converged one. The K's grow
+    # by one per pass and the witness counts show which passes drove it.
+    assert len(result.pass_history) == 4
+    assert [e["pass"] for e in result.pass_history] == [0, 1, 2, 3]
+    assert [e["K_phi"] for e in result.pass_history] == [1, 2, 3, 4]
+    assert [e["island_witnesses_found"] for e in result.pass_history] == [1, 1, 1, 0]
+
     # No augmentation follows the converged solve, so here -- and only here
     # -- the reconstruction from the witness totals does agree.
     assert result.final_K_phi == len(problem.samples_1) + 3
@@ -233,3 +231,92 @@ def test_cap_path_counts_are_equal_and_objective_predates_last_augmentation():
 
     # The objective is the sample count of the problem it was solved on.
     assert result.objective == result.final_K_phi
+
+    # The history records the final pass's witnesses too, even though no
+    # solve followed them -- which is exactly the discrepancy final_K_phi
+    # exists to resolve.
+    assert len(result.pass_history) == 3
+    assert [e["K_phi"] for e in result.pass_history] == [1, 2, 3]
+    assert [e["island_witnesses_found"] for e in result.pass_history] == [1, 1, 1]
+    assert result.pass_history[-1]["K_phi"] == result.final_K_phi
+
+
+# ---------------------------------------------------------------------------
+# Inner-solver failures carry the loop's state out with them
+# ---------------------------------------------------------------------------
+
+def _failing_solver(fail_on_pass, script):
+    """Runs `script` normally until `fail_on_pass`, which raises instead."""
+    calls = []
+
+    def solver(problem, **kwargs):
+        index = len(calls)
+        calls.append(len(problem.samples_1))
+        if index == fail_on_pass:
+            raise InnerSolveFailure(
+                "no feasible solution", info={"status": "TIME_LIMIT"}
+            )
+        stable, unstable, reconnected = script[min(index, len(script) - 1)]
+        return InnerResult(
+            stable_islands=stable, unstable_islands=unstable,
+            reconnected_edges=reconnected, objective=float(len(problem.samples_1)),
+        )
+
+    solver.calls = calls
+    return solver
+
+
+def test_a_failure_on_the_first_pass_reports_the_initial_sample_sets():
+    problem = _fixture()
+    solver = _failing_solver(0, [_SPLIT])
+
+    with pytest.raises(InnerSolveFailure) as caught:
+        solve(problem, max_outer_iterations=5, inner_solver=solver)
+
+    state = caught.value.outer_state
+    assert state["failed_pass"] == 0
+    assert (state["K_phi"], state["K_psi"]) == (1, 1)
+    assert state["inner_solve_count"] == 0        # none completed
+    assert state["augmentation_rounds"] == 0
+    assert state["pass_history"] == ()
+
+
+def test_a_failure_on_a_later_pass_reports_the_AUGMENTED_sample_sets():
+    # The case a first-pass-only test cannot catch. Pass 0 succeeds and
+    # augments; pass 1 fails. A caller that recorded the ORIGINAL problem
+    # here would write config.P_1/P_2 = 1 beside a status and model size
+    # that came from the K=2 problem -- a self-contradictory record.
+    problem = _fixture()
+    solver = _failing_solver(1, [_SPLIT])
+
+    with pytest.raises(InnerSolveFailure) as caught:
+        solve(problem, max_outer_iterations=5, inner_solver=solver)
+
+    state = caught.value.outer_state
+    assert state["failed_pass"] == 1
+    # The failed pass solved against the GROWN sets, not the initial ones.
+    assert (state["K_phi"], state["K_psi"]) == (2, 2)
+    assert (len(problem.samples_1), len(problem.samples_2)) == (1, 1)
+
+    # The work that did complete survives the failure.
+    assert state["inner_solve_count"] == 1
+    assert state["augmentation_rounds"] == 1
+    assert state["total_island_witnesses_added"] == 1
+    assert state["total_component_witnesses_added"] == 1
+    assert state["total_witnesses_added"] == 2
+
+    # ...as does the history of the pass that came before it.
+    assert len(state["pass_history"]) == 1
+    assert state["pass_history"][0]["pass"] == 0
+    assert state["pass_history"][0]["K_phi"] == 1
+
+
+def test_the_solvers_own_diagnostics_survive_enrichment():
+    problem = _fixture()
+    solver = _failing_solver(1, [_SPLIT])
+
+    with pytest.raises(InnerSolveFailure) as caught:
+        solve(problem, max_outer_iterations=5, inner_solver=solver)
+
+    assert caught.value.info["status"] == "TIME_LIMIT"
+    assert "no feasible solution" in str(caught.value)

@@ -22,6 +22,8 @@ import pytest
 
 from islanding.topology import Topology
 from islanding.dynamics import LinearConsensus
+from islanding.cost import CostData, AlgorithmConfig, linear_consensus_model
+from islanding.evaluate import Problem
 
 
 @pytest.fixture
@@ -90,3 +92,40 @@ def synthetic_edge_energy_model():
         return replace(base_model, W_ij=W_ij, grad_W_ij=grad_W_ij)
 
     return build
+
+
+def build_two_node_problem():
+    """The 2-node outer-loop fixture (docs/outer_loop_spec.md section 6).
+
+    w_1 = -1, w_2 = 3, w_12 = 3, beta = gamma = 1. Island {1} alone has
+    M = [-1], so the counterexample search yields the node-1 witness and
+    the augment path can be exercised deterministically.
+
+    Lives here because more than one test module needs it, and conftest is
+    the only file pytest guarantees is importable from all of them --
+    `from tests.test_outer_loop import ...` resolves only when the repo
+    root happens to be on sys.path. Same reasoning as
+    [synthetic_edge_energy_model] above.
+    """
+    topology = Topology(nodes=[1, 2], edges=[(1, 2)])
+    model = linear_consensus_model({1: -1.0, 2: 3.0}, {(1, 2): 3.0})
+    cost_data = CostData(node_costs={1: 1, 2: 1}, edge_costs={(1, 2): 1})
+    config = AlgorithmConfig(
+        kappa_op=1.0, kappa_rec=0.7,
+        alpha_1=1.0, beta=1.0, k_1=0.2, P_1=1,
+        alpha_2=1.0, gamma=1.0, k_2=0.2, P_2=1,
+    )
+    # Single sample point x = (1, 0) -- NOT the node-1 witness (sqrt(2), 0):
+    # same direction, different magnitude, so it is not literally present
+    # in the initial sample sets.
+    samples = np.array([[[1.0], [0.0]]])
+    return Problem(
+        topology=topology, model=model, cost_data=cost_data, config=config,
+        samples_1=samples, samples_2=samples,
+    )
+
+
+@pytest.fixture
+def two_node_problem():
+    """A fresh build_two_node_problem() per test."""
+    return build_two_node_problem()

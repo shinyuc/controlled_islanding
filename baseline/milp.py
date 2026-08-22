@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from islanding.cost import canon
+from islanding.inner import InnerSolveFailure
 
 
 @dataclass(frozen=True)
@@ -569,12 +570,143 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
 # STEP 3 -- solver interface (spec section 7)
 # ---------------------------------------------------------------------------
 
+# Fallback names, used only if the reverse lookup off GRB.Status fails
+# (gurobipy missing, or a future release changing how it exposes them).
+# Kept complete through 19 so a status is never reported as a bare number.
 _STATUS_NAMES = {
     1: "LOADED", 2: "OPTIMAL", 3: "INFEASIBLE", 4: "INF_OR_UNBD",
     5: "UNBOUNDED", 6: "CUTOFF", 7: "ITERATION_LIMIT", 8: "NODE_LIMIT",
     9: "TIME_LIMIT", 10: "SOLUTION_LIMIT", 11: "INTERRUPTED",
-    12: "NUMERIC", 13: "SUBOPTIMAL",
+    12: "NUMERIC", 13: "SUBOPTIMAL", 14: "INPROGRESS", 15: "USER_OBJ_LIMIT",
+    16: "WORK_LIMIT", 17: "MEM_LIMIT", 18: "LOCALLY_OPTIMAL",
+    19: "LOCALLY_INFEASIBLE",
 }
+
+# Gurobi's "no finite value" sentinel. MIPGap in particular returns this
+# when the incumbent objective is zero or no bound exists, and serialized
+# naively it becomes an enormous but ordinary-looking float.
+_GUROBI_INFINITY = 1e100
+
+
+def _gurobi_status_constants():
+    """{name: code} for every status gurobipy exposes, or {} if it cannot.
+
+    Must go through dir()/getattr, NOT vars(): GRB.Status is a
+    StatusConstClass whose __dict__ is EMPTY (verified on gurobipy 13.0.2),
+    so a vars()-based reverse lookup silently finds nothing and every code
+    quietly falls through to the static table -- which is how the promised
+    forward compatibility came to be untrue while every test still passed.
+    """
+    try:
+        from gurobipy import GRB
+
+        status = GRB.Status
+        constants = {
+            name: getattr(status, name)
+            for name in dir(status)
+            if not name.startswith("_")
+        }
+        return {
+            name: value for name, value in constants.items()
+            if isinstance(value, int) and not isinstance(value, bool)
+        }
+    except Exception:      # gurobipy absent, or GRB.Status not introspectable
+        return {}
+
+
+def _status_name(code):
+    """Human-readable name for a Gurobi status code.
+
+    Read off GRB.Status first so codes added by newer Gurobi versions are
+    named without touching this file; _STATUS_NAMES covers the same ground
+    if that lookup fails. An unknown code is labelled as unrecognised
+    rather than returned bare -- "17" alone reads like a name in JSON.
+    """
+    for name, value in _gurobi_status_constants().items():
+        if value == code:
+            return name
+    if code in _STATUS_NAMES:
+        return _STATUS_NAMES[code]
+    return f"UNRECOGNISED_STATUS_{code}"
+
+
+def _finite_or_none(value):
+    """`value` as a float, or None if it is missing or Gurobi's infinity.
+
+    Guards every numeric solver attribute that reaches the JSON: an
+    infinite gap or bound must serialize as null, not as 1e100.
+    """
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or abs(number) >= _GUROBI_INFINITY:   # NaN or +-inf
+        return None
+    return number
+
+
+def _safe_attr(model, name):
+    """Read a Gurobi attribute, or None if it is unavailable.
+
+    Attributes like MIPGap and ObjBound raise when the model has no
+    solution, which is exactly the case the no-incumbent path reports on.
+    """
+    try:
+        return model.getAttr(name)
+    except Exception:
+        return None
+
+
+def _gap_block(objective, best_bound, raw_gap):
+    """Relative and absolute gap, with an explicit reason when unavailable.
+
+    The relative gap is the one Gurobi reports; it is None whenever that
+    is infinite (zero incumbent, or no bound). The absolute gap is
+    recorded alongside because it stays meaningful in exactly that case.
+    """
+    relative = _finite_or_none(raw_gap)
+    absolute = None
+    if objective is not None and best_bound is not None:
+        absolute = abs(objective - best_bound)
+
+    reason = None
+    if relative is None:
+        if objective is None:
+            # No incumbent, so there is no absolute gap either -- pointing
+            # a reader at absolute_gap would send them to another null.
+            reason = (
+                "Gurobi reports no finite relative gap, and with no "
+                "incumbent there is no absolute gap either. Only "
+                "best_bound is available."
+            )
+        else:
+            reason = (
+                "Gurobi reports no finite relative gap -- the incumbent "
+                "objective is zero, or no bound is available. Read "
+                "absolute_gap and best_bound instead."
+            )
+    return {
+        "attained_mip_gap": relative,
+        "attained_mip_gap_unavailable_reason": reason,
+        "absolute_gap": absolute,
+    }
+
+
+class NoIncumbentError(InnerSolveFailure):
+    """The MILP stopped without any feasible solution.
+
+    Carries `info` -- the same diagnostics a successful solve reports,
+    minus the ones that need an incumbent -- so the caller can record the
+    termination instead of losing it. A time limit that expires before the
+    first incumbent, or an infeasible model, is a reportable OUTCOME; the
+    only thing missing is a partition to return.
+
+    Subclasses InnerSolveFailure so islanding.outer_loop.solve can catch it
+    without importing this module, and enrich it with the pass index and
+    sample-set sizes that only the loop knows.
+    """
 
 
 def _decode(built):
@@ -633,26 +765,54 @@ def milp_solver(problem, milp_config, initial_tree=None):
     model.optimize()
     solve_time = time.perf_counter() - start
 
-    status = _STATUS_NAMES.get(model.Status, str(model.Status))
+    status = _status_name(model.Status)
+    best_bound = _finite_or_none(_safe_attr(model, "ObjBound"))
+
+    # Diagnostics that need no incumbent, so both exit paths report them.
+    shared_info = {
+        "status": status,
+        # Requested vs attained, kept apart: a run that stopped at the time
+        # limit reports whatever gap it reached, which says nothing about
+        # what was asked for.
+        "requested_mip_gap": milp_config.mip_gap,
+        # The dual bound. With an incumbent this gives a certified interval
+        # [best_bound, objective] for the FINAL INNER sampled optimum --
+        # the thing to read on a TIME_LIMIT run, where a relative gap alone
+        # is hard to interpret near zero. None if Gurobi has no finite one.
+        "best_bound": best_bound,
+        "time_limit": milp_config.time_limit,
+        "solve_time": solve_time,
+        "n_vars": model.NumVars,
+        "n_constrs": model.NumConstrs,
+    }
+
     if model.SolCount == 0:
-        raise RuntimeError(
+        # No partition to return -- but the termination itself is a result
+        # worth recording, so it is raised with its diagnostics attached
+        # rather than reduced to a message. Without this, a run that timed
+        # out before its first incumbent leaves nothing behind and cannot
+        # be told apart from a job that never started.
+        raise NoIncumbentError(
             f"MILP produced no feasible solution (status {status}). "
             "A time limit that expires before the first incumbent is a "
-            "reportable outcome, but there is no partition to return."
+            "reportable outcome, but there is no partition to return.",
+            info={
+                **shared_info,
+                "incumbent": None,
+                **_gap_block(None, best_bound, _safe_attr(model, "MIPGap")),
+            },
         )
 
     stable, unstable, reconnected = _decode(built)
+    objective = model.ObjVal
 
     return InnerResult(
         stable_islands=stable,
         unstable_islands=unstable,
         reconnected_edges=reconnected,
-        objective=model.ObjVal,
+        objective=objective,
         info={
-            "status": status,
-            "mip_gap": model.MIPGap,
-            "solve_time": solve_time,
-            "n_vars": model.NumVars,
-            "n_constrs": model.NumConstrs,
+            **shared_info,
+            **_gap_block(objective, best_bound, _safe_attr(model, "MIPGap")),
         },
     )

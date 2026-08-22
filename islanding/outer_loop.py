@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from islanding.inner import InnerSolveFailure
 from islanding.local_search import local_search
 from islanding.counterexample import find_counterexamples_for_partition
 
@@ -57,7 +58,16 @@ class SolveResult:
     # Optional: only inner solvers that use the matroid encoding have one.
     # A MILP will leave this None, so read the partition fields instead.
     tree: object = None
+    # The FINAL pass's diagnostics only. An earlier pass may have exited
+    # differently -- a MILP that hit its time limit on pass 0 shaped that
+    # pass's partition, its witnesses, and every pass after it -- and none
+    # of that is visible here. Read pass_history for the whole run.
     info: dict = field(default_factory=dict)  # the inner solver's diagnostics
+    # One entry per inner solve, in order: the pass index, that pass's
+    # scalar diagnostics, and how many witnesses it produced. Non-scalar
+    # entries in a solver's info (local search puts its tree there) are
+    # dropped, so this stays serializable.
+    pass_history: tuple = ()
 
 
 def _augment(problem, island_witnesses, component_witnesses):
@@ -78,9 +88,23 @@ def _augment(problem, island_witnesses, component_witnesses):
     return replace(problem, samples_1=samples_1, samples_2=samples_2, config=config)
 
 
+def _scalar_info(info):
+    """The JSON-safe part of an inner solver's info dict.
+
+    Solvers may park arbitrary objects in `info` -- local_search puts its
+    networkx tree there -- so keep only scalars. Dropping silently is the
+    right call: the history is a diagnostic record, and a solver adding a
+    new non-scalar diagnostic should not break the outer loop.
+    """
+    return {
+        key: value for key, value in info.items()
+        if isinstance(value, (int, float, str, bool, type(None)))
+    }
+
+
 def _solve_result(
     inner, solved_on, inner_solve_count, augmentation_rounds,
-    island_added, component_added, reason,
+    island_added, component_added, reason, pass_history,
 ):
     """Lift an inner solver's InnerResult into a SolveResult.
 
@@ -98,6 +122,7 @@ def _solve_result(
         total_component_witnesses_added=component_added,
         final_K_phi=len(solved_on.samples_1),
         final_K_psi=len(solved_on.samples_2),
+        pass_history=tuple(pass_history),
         reason=reason,
         stable_islands=inner.stable_islands,
         unstable_islands=inner.unstable_islands,
@@ -124,12 +149,19 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
     the loop variable counts -- not the number of augmentations, which is
     one fewer whenever the loop converges. See SolveResult for why the two
     are reported separately.
+
+    An InnerSolveFailure from any pass propagates, but not before the loop
+    attaches its own state to it (which pass, at which K's, with what
+    history behind it). A caller recording that failure must use the
+    attached `outer_state`, not the problem it originally passed in: after
+    even one augmentation the two describe different sample sets.
     """
     current = problem
     island_added = 0
     component_added = 0
     inner_solve_count = 0
     augmentation_rounds = 0
+    pass_history = []
 
     for outer in range(max_outer_iterations):
         warm_start = (
@@ -137,7 +169,31 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
             if outer == 0 and initial_tree is not None
             else {}
         )
-        result = inner_solver(current, **warm_start)
+        try:
+            result = inner_solver(current, **warm_start)
+        except InnerSolveFailure as failure:
+            # The solver has its own diagnostics, but only this loop knows
+            # WHICH pass failed and what sample sets that pass was solving
+            # against. Without this, a failure on any pass after the first
+            # is recorded against the ORIGINAL problem -- config.P_1/P_2
+            # from the initial sample sets next to a model size and bound
+            # from a larger augmented one, an internally contradictory
+            # record. Everything accumulated so far would be lost too.
+            #
+            # `current` is the problem this pass was handed, the same
+            # capture `solved_on` makes on the success paths.
+            raise failure.attach_outer_state(
+                failed_pass=outer,
+                K_phi=len(current.samples_1),
+                K_psi=len(current.samples_2),
+                # Completed solves, not counting the one that just failed.
+                inner_solve_count=inner_solve_count,
+                augmentation_rounds=augmentation_rounds,
+                total_island_witnesses_added=island_added,
+                total_component_witnesses_added=component_added,
+                total_witnesses_added=island_added + component_added,
+                pass_history=tuple(pass_history),
+            )
         inner_solve_count += 1
         # The problem `result.objective` was computed on. Captured before
         # the augmentation below, because on the cap path the loop exits
@@ -158,12 +214,22 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
             result.stable_islands, result.reconnected_edges, current
         )
 
+        pass_history.append({
+            "pass": outer,
+            "K_phi": len(current.samples_1),
+            "K_psi": len(current.samples_2),
+            "objective": result.objective,
+            "island_witnesses_found": len(island_witnesses),
+            "component_witnesses_found": len(component_witnesses),
+            **_scalar_info(result.info),
+        })
+
         if not island_witnesses and not component_witnesses:
             # This solve found nothing to add, so no augmentation follows
             # it: the two counts differ by one on this path.
             return _solve_result(
                 result, solved_on, inner_solve_count, augmentation_rounds,
-                island_added, component_added, "converged",
+                island_added, component_added, "converged", pass_history,
             )
 
         island_added += len(island_witnesses)
@@ -177,5 +243,5 @@ def solve(problem, max_outer_iterations, inner_solver=local_search, initial_tree
     # is exactly why `solved_on` is the pre-augmentation problem.
     return _solve_result(
         result, solved_on, inner_solve_count, augmentation_rounds,
-        island_added, component_added, "max_outer_iterations",
+        island_added, component_added, "max_outer_iterations", pass_history,
     )

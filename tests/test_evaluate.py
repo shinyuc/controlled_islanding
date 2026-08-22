@@ -90,8 +90,9 @@ def test_evaluate_matches_worked_example_with_zero_samples():
 
     result = evaluate(tree, problem)
 
-    # F2 is temporarily muted in evaluate() (islanding/evaluate.py), so the
-    # worked example's F2=7 no longer contributes: 40.2 - 7 = 33.2.
+    # evaluate() computes no F2 -- the term was dropped from the
+    # formulation (islanding/evaluate.py) -- so the worked example's F2=7
+    # does not contribute: 40.2 - 7 = 33.2.
     assert result == pytest.approx(33.2)
 
 
@@ -127,8 +128,9 @@ def test_evaluate_penalty_terms_raise_total_above_worked_example():
 
     result = evaluate(tree, problem)
 
-    # F2 is temporarily muted in evaluate() (islanding/evaluate.py), so the
-    # comparison baseline drops by the worked example's F2=7: 40.2 - 7 = 33.2.
+    # evaluate() computes no F2 -- the term was dropped from the
+    # formulation (islanding/evaluate.py) -- so the comparison baseline
+    # drops by the worked example's F2=7: 40.2 - 7 = 33.2.
     assert result > 33.2
 
 
@@ -205,8 +207,13 @@ def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
     assert unstable == [frozenset({8, 9})]
     assert reconnected == set()
 
-    # F2 is temporarily muted in evaluate() (islanding/evaluate.py), so its
-    # internal f2 contribution is 0 even though f2_unstable_edges (called
-    # above, unmuted) computes a nonzero value here. Pass 0.0 in its place
-    # to match; restore `f2` once evaluate() re-enables the real term.
+    # evaluate() contributes no F2: the term was dropped from the
+    # formulation, so it passes 0.0 into F's f2 slot. f2_unstable_edges
+    # still exists and is called directly above, where it computes a
+    # NONZERO value on this fixture -- pinned here, because it is what
+    # makes the next assertion meaningful: if f2 were 0 anyway, passing
+    # 0.0 would prove nothing about evaluate() omitting the term.
+    assert f2 > 0
+    # So 0.0, not `f2`, is what matches evaluate(). This is the permanent
+    # expectation, not a placeholder.
     assert result == pytest.approx(F(f1, 0.0, f3, f4))

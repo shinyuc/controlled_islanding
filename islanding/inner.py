@@ -26,3 +26,34 @@ class InnerResult:
     reconnected_edges: set     # E^rec, canonical (min, max) tuples
     objective: float           # F_hat at the returned partition
     info: dict = field(default_factory=dict)  # solver-specific diagnostics
+
+
+class InnerSolveFailure(RuntimeError):
+    """An inner solver terminated without a usable partition.
+
+    Solver-agnostic, and lives here beside InnerResult for the same
+    reason: the outer loop must be able to catch and enrich a failure
+    without importing any particular solver. baseline.milp.NoIncumbentError
+    subclasses it, so the dependency still runs one way (baseline imports
+    islanding, never the reverse).
+
+    `info` is the solver's own diagnostics -- status, model size, limits,
+    whatever it can report without a solution. `outer_state` is filled in
+    by islanding.outer_loop.solve, which is the only layer that knows
+    which pass failed and what sample sets that pass was solving against.
+    It stays None if the solver is called outside the outer loop.
+    """
+
+    def __init__(self, message, info=None):
+        super().__init__(message)
+        self.info = dict(info or {})
+        self.outer_state = None
+
+    def attach_outer_state(self, **state):
+        """Record the loop state around the failed pass, and return self.
+
+        Returns self so a caller can `raise exc.attach_outer_state(...)`
+        and keep the original traceback.
+        """
+        self.outer_state = dict(state)
+        return self

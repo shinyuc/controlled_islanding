@@ -47,12 +47,14 @@ def test_canon_sorts_endpoints():
 
 
 def test_algorithm_config_requires_kappa_op_greater_than_kappa_rec():
-    with pytest.raises(AssertionError):
+    # ValueError, not AssertionError: these checks back a persisted
+    # optimality claim, so they must survive `python -O`.
+    with pytest.raises(ValueError):
         AlgorithmConfig(kappa_op=0.5, kappa_rec=0.7)
 
 
 def test_algorithm_config_requires_k1_at_least_k2():
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         AlgorithmConfig(kappa_op=1.0, kappa_rec=0.7, k_1=0.2, k_2=1.0)
 
     # k_1 == k_2 is allowed -- the constraint is >=, not strict.
@@ -435,3 +437,125 @@ def test_f6_all_four_parts_with_nonzero_edge_energy(synthetic_edge_energy_model)
     )
 
     assert f6 == pytest.approx(0.015625)
+
+
+# ---------------------------------------------------------------------------
+# The assumptions the zero-objective optimality proof rests on
+# ---------------------------------------------------------------------------
+
+def test_cost_data_rejects_negative_node_costs():
+    with pytest.raises(ValueError, match="nonnegative"):
+        CostData(node_costs={1: 1, 2: -1}, edge_costs={(1, 2): 1})
+
+
+def test_cost_data_rejects_negative_edge_costs():
+    # The reviewer's counterexample: a two-node instance with a negative
+    # edge cost lets a partition reach F_hat = -1, so local search
+    # reporting "zero_objective" at 0 would not be globally optimal at all.
+    with pytest.raises(ValueError, match="nonnegative"):
+        CostData(node_costs={1: 1, 2: 1}, edge_costs={(1, 2): -1})
+
+
+def test_cost_data_accepts_zero_costs():
+    # Nonnegative, not strictly positive -- a free node or edge is legal.
+    data = CostData(node_costs={1: 0, 2: 1}, edge_costs={(1, 2): 0})
+
+    assert data.node_costs[1] == 0
+    assert data.edge_costs[(1, 2)] == 0
+
+
+def test_algorithm_config_requires_positive_kappa_op():
+    # kappa_op > kappa_rec alone permits a negative kappa_op, which makes
+    # F3 negative and breaks F_hat >= 0.
+    with pytest.raises(ValueError):
+        AlgorithmConfig(kappa_op=-1.0, kappa_rec=-2.0)
+
+
+def test_negative_edge_cost_would_make_a_negative_objective_reachable():
+    # Why the validation above matters, made concrete. With w = -1 on the
+    # single edge, cutting it earns F3 = kappa_op * (-1) = -1 -- so a
+    # partition exists with F_hat < 0, and "zero is optimal" is false.
+    # CostData now refuses the instance, so the proof's premise holds.
+    topology = Topology(nodes=[1, 2], edges=[(1, 2)])
+    config = AlgorithmConfig(kappa_op=1.0, kappa_rec=0.7)
+
+    with pytest.raises(ValueError):
+        cost_data = CostData(node_costs={1: 0, 2: 0}, edge_costs={(1, 2): -1})
+        f3_operation_edges(
+            [frozenset({1}), frozenset({2})], [], topology, cost_data, config
+        )
+
+
+# ---------------------------------------------------------------------------
+# Nonfinite values, and validation that survives `python -O`
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_cost_data_rejects_nonfinite_node_costs(bad):
+    # NaN is the dangerous one: `nan < 0` is False, so it passes every
+    # comparison-based check and then poisons every sum it enters.
+    with pytest.raises(ValueError, match="finite"):
+        CostData(node_costs={1: bad, 2: 1}, edge_costs={(1, 2): 1})
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_cost_data_rejects_nonfinite_edge_costs(bad):
+    with pytest.raises(ValueError, match="finite"):
+        CostData(node_costs={1: 1, 2: 1}, edge_costs={(1, 2): bad})
+
+
+@pytest.mark.parametrize(
+    "param", ["kappa_op", "kappa_rec", "alpha_1", "alpha_2", "k_1", "k_2"]
+)
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_algorithm_config_rejects_nonfinite_coefficients(param, bad):
+    # inf * 0 is NaN, so one infinite coefficient makes F undefined rather
+    # than merely large -- and then "is the objective zero?" is False for
+    # every partition, silently.
+    kwargs = {"kappa_op": 1.0, "kappa_rec": 0.7, param: bad}
+    with pytest.raises(ValueError, match="finite"):
+        AlgorithmConfig(**kwargs)
+
+
+def test_validations_are_not_stripped_by_python_dash_O():
+    # `assert` statements vanish under -O. These checks are what make the
+    # persisted proof_basis claim true, so they must be raises, not
+    # asserts. Run in a subprocess because -O is set at interpreter start.
+    import subprocess
+    import sys
+
+    program = """
+from islanding.cost import CostData, AlgorithmConfig
+from baseline.config import MILPConfig
+
+assert __debug__ is False, "-O did not take effect; test is vacuous"
+
+cases = [
+    ("negative node cost", lambda: CostData(node_costs={1: -1}, edge_costs={})),
+    ("negative edge cost", lambda: CostData(node_costs={}, edge_costs={(1, 2): -1})),
+    ("nan cost",           lambda: CostData(node_costs={1: float('nan')}, edge_costs={})),
+    ("nonpositive kappa_op",
+        lambda: AlgorithmConfig(kappa_op=-1.0, kappa_rec=-2.0)),
+    ("kappa_op <= kappa_rec",
+        lambda: AlgorithmConfig(kappa_op=0.5, kappa_rec=0.7)),
+    ("inf kappa_op",
+        lambda: AlgorithmConfig(kappa_op=float('inf'), kappa_rec=0.7)),
+    ("nan mip_gap", lambda: MILPConfig(time_limit=1.0, mip_gap=float('nan'))),
+]
+for label, build in cases:
+    try:
+        build()
+    except ValueError:
+        continue
+    raise SystemExit(f"NOT REJECTED under -O: {label}")
+print("all rejected")
+"""
+    completed = subprocess.run(
+        [sys.executable, "-O", "-c", program],
+        capture_output=True, text=True,
+    )
+
+    assert completed.returncode == 0, (
+        f"stdout={completed.stdout!r} stderr={completed.stderr!r}"
+    )
+    assert "all rejected" in completed.stdout

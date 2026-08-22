@@ -50,7 +50,7 @@ from examples.linear_10node.linear_10node import (
     faulty_nodes, faulty_edges,
 )
 from examples.linear_10node.config import build_config, build_milp_config
-from utils.save import save_result
+from utils.save import save_result, save_failure_result
 from islanding.outer_loop import solve
 from islanding.search import build_reconnected_components
 from islanding.counterexample import find_counterexamples_for_partition
@@ -58,7 +58,7 @@ from islanding.cost import (
     canon, f1_unstable_nodes, f3_operation_edges,
     f4_reconnection, f5_stability_penalty, f6_reconnection_stability, F,
 )
-from baseline.milp import milp_solver
+from baseline.milp import milp_solver, NoIncumbentError
 
 # Must match run_linear_10node.py -- see the module docstring.
 # SETUP = EDGE_FAULTS
@@ -75,6 +75,9 @@ INNER_METHOD = "MILP"
 # same budget.
 MAX_OUTER_ITERATIONS = 20
 
+# Named so the saved result records exactly what ran.
+SEED = 0
+
 
 def _lambda_min(nodes, edges):
     M = build_M(nodes, edges, SETUP.node_weights, SETUP.edge_weights)
@@ -87,7 +90,7 @@ def _induced_edges(topology, nodes):
 
 def main():
     problem = build_problem(
-        SETUP, build_topology(), seed=0, config=build_config()
+        SETUP, build_topology(), seed=SEED, config=build_config()
     )
     topology = problem.topology
     config = problem.config
@@ -99,9 +102,40 @@ def main():
     inner = partial(milp_solver, milp_config=build_milp_config())
 
     start = time.perf_counter()
-    result = solve(
-        problem, max_outer_iterations=MAX_OUTER_ITERATIONS, inner_solver=inner
-    )
+    try:
+        result = solve(
+            problem, max_outer_iterations=MAX_OUTER_ITERATIONS, inner_solver=inner
+        )
+    except NoIncumbentError as exc:
+        # The MILP stopped with no feasible solution -- no partition, so no
+        # report below can be produced. Record the termination anyway:
+        # "timed out before the first incumbent" and "infeasible" are
+        # results, and writing nothing makes them indistinguishable from a
+        # run that never happened.
+        elapsed = time.perf_counter() - start
+        print("=== Solve ===")
+        print(f"NO INCUMBENT: {exc}")
+        print(f"runtime (s):                {elapsed:.3f}")
+        path = save_failure_result(
+            "linear_10node_milp",
+            method=INNER_METHOD,
+            seed=SEED,
+            max_outer_iterations=MAX_OUTER_ITERATIONS,
+            runtime_seconds=elapsed,
+            setup_name=SETUP.name,
+            faulty_nodes=faulty_nodes(SETUP),
+            faulty_edges=faulty_edges(SETUP),
+            problem=problem,
+            info=exc.info,
+            error=exc,
+            # solve() attached which pass failed and the sample sets it was
+            # solving against. `problem` above is the ORIGINAL one, so after
+            # any augmentation its P_1/P_2 are not what the failed pass saw
+            # -- this is what keeps the record self-consistent.
+            outer_state=exc.outer_state,
+        )
+        print(f"Saved no-incumbent result to {path}")
+        return
     elapsed = time.perf_counter() - start
 
     # The partition comes straight off the result. result.tree is None for
@@ -113,7 +147,12 @@ def main():
     components = build_reconnected_components(stable, reconnected, topology)
 
     print("=== Solve ===")
-    print(f"reason:                     {result.reason}")
+    # `reason` is the STABILITY ORACLE's verdict on the returned partition,
+    # never an optimisation status. "converged" says a partition survived
+    # the counterexample search; it says nothing about how well, or how
+    # provably, the inner problem was solved on the pass that produced it.
+    print(f"reason:                     {result.reason}"
+          f"   -- stability oracle's verdict, not an optimisation status")
     # Two counts, not one: they differ by one when the loop converges (the
     # final solve found nothing to add) and are equal when it hits the cap.
     print(f"inner solves:               {result.inner_solve_count}")
@@ -143,8 +182,15 @@ def main():
     print("=== MILP ===")
     info = result.info
     print(f"status (final pass):        {info.get('status')}")
-    print(f"mip_gap attained:           {info.get('mip_gap')}")
-    print(f"mip_gap requested:          {build_milp_config().mip_gap}")
+    print(f"mip_gap attained:           {info.get('attained_mip_gap')}")
+    print(f"mip_gap requested:          {info.get('requested_mip_gap')}")
+    # Incumbent and dual bound together: the inner optimum lies in
+    # [best_bound, objective]. On a TIME_LIMIT run this interval is what
+    # says how much was left on the table -- a relative gap near zero is
+    # hard to read on its own.
+    print(f"incumbent (objective):      {result.objective}")
+    print(f"best bound:                 {info.get('best_bound')}")
+    print(f"time limit (s):             {info.get('time_limit')}")
     print(f"solve time, final pass (s): {info.get('solve_time')}")
     print(f"n_vars:                     {info.get('n_vars')}")
     print(f"n_constrs:                  {info.get('n_constrs')}")
@@ -153,6 +199,36 @@ def main():
             "  FLAG: the final pass hit the time limit, so its partition is "
             "the best incumbent found, NOT the inner optimum -- raise "
             "time_limit in build_milp_config() before comparing costs"
+        )
+    # The two words mean different things and can disagree. Printed
+    # unconditionally, because the reader has just seen both.
+    print(f"outer reason:               {result.reason}   -- the STABILITY "
+          f"ORACLE's verdict")
+    print(f"inner status:               {info.get('status')}   -- the "
+          f"OPTIMISER's verdict")
+    print(
+        "  'converged' means the returned partition has no stability\n"
+        "  counterexample. It does NOT mean the inner problem was solved to\n"
+        "  optimality: reason='converged' with status='TIME_LIMIT' is a\n"
+        "  valid combination, and means an unproven incumbent passed the\n"
+        "  oracle."
+    )
+    # result.info is the FINAL pass only. An earlier pass that hit the time
+    # limit shaped its own partition, the witnesses drawn from it, and every
+    # pass after it -- so scan the per-pass statuses rather than trusting
+    # the last one to represent the run.
+    # EARLIER passes only -- the final one is already covered by the FLAG
+    # above, and including it here would make "earlier passes also" false
+    # on a run where only the last pass timed out.
+    stalled = [
+        entry["pass"] for entry in result.pass_history[:-1]
+        if entry.get("status") == "TIME_LIMIT"
+    ]
+    if stalled:
+        print(
+            f"  FLAG: earlier passes also hit the time limit: {stalled}. "
+            "Those passes' partitions were unproven incumbents, and every "
+            "later pass inherited the witnesses drawn from them."
         )
     print()
 
@@ -296,6 +372,9 @@ def main():
 
     path = save_result(
         result, problem, example_name="linear_10node_milp",
+        method=INNER_METHOD,
+        seed=SEED,
+        max_outer_iterations=MAX_OUTER_ITERATIONS,
         runtime_seconds=elapsed,
         setup_name=SETUP.name,
         faulty_nodes=faulty_nodes(SETUP),
@@ -304,9 +383,11 @@ def main():
         component_lambda_min=component_lambda_min,
         cost_terms={
             "f1": f1, "f3": f3, "f4": f4, "f5": f5, "f6": f6,
-            # Recorded separately, each with its basis: only the economic
-            # cost is comparable across methods, and the penalised total
-            # is meaningless without the K it was computed on.
+            # Recorded separately, each with its basis. The economic
+            # cost is unconditionally sample-independent. The penalised
+            # total is comparable only as a score on an identical common
+            # sample set -- never as an optimality-gap measurement -- and
+            # is uninterpretable without the K it was computed on.
             "economic_cost": economic,
             "total_with_penalties": total,
             "K_phi": initial_K_phi, "K_psi": initial_K_psi,

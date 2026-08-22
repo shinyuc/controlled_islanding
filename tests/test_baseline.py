@@ -27,8 +27,12 @@ from islanding.cost import (
     f5_stability_penalty, f6_reconnection_stability,
 )
 from baseline.config import MILPConfig
+from islanding.inner import InnerSolveFailure
+from islanding.outer_loop import solve
 from baseline.milp import (
-    milp_solver, phi_certificates, psi_certificates, build_model,
+    milp_solver, phi_certificates, psi_certificates, build_model, NoIncumbentError,
+    _status_name, _finite_or_none, _gap_block, _gurobi_status_constants,
+    _STATUS_NAMES,
 )
 
 # The synthetic nonzero-edge-energy model comes from tests/conftest.py as
@@ -413,3 +417,160 @@ def test_phi_e_takes_the_j_side_partial_from_the_canonical_call():
     #   Phi^t_211 = 3.0 * -6.0 = -18.0   (element 0 of grad_W_ij(2, 1, ..))
     assert phi.Phi_t[(1, 2, 2)][0] == pytest.approx(8.0)
     assert phi.Phi_t[(2, 1, 1)][0] == pytest.approx(-18.0)
+
+
+# ---------------------------------------------------------------------------
+# Solver-attribute edge cases (no model needed -- these are pure helpers)
+# ---------------------------------------------------------------------------
+
+def test_status_names_cover_the_codes_gurobi_actually_returns():
+    # The map used to stop at 13, so a MEM_LIMIT or WORK_LIMIT termination
+    # serialized as the bare string "17" -- which reads like a name.
+    assert _status_name(2) == "OPTIMAL"
+    assert _status_name(9) == "TIME_LIMIT"
+    assert _status_name(15) == "USER_OBJ_LIMIT"
+    assert _status_name(16) == "WORK_LIMIT"
+    assert _status_name(17) == "MEM_LIMIT"
+
+
+def test_status_constants_are_actually_read_off_gurobi():
+    # The DYNAMIC path, which is the whole point of the lookup and which
+    # silently did nothing before: GRB.Status is a StatusConstClass whose
+    # __dict__ is EMPTY, so the original vars()-based reverse lookup found
+    # zero constants and every code fell through to the static table. Every
+    # status the other tests exercise is in that table, so they all passed.
+    constants = _gurobi_status_constants()
+
+    # Non-empty is the assertion that would have caught the bug.
+    assert constants, "no status constants read from gurobipy"
+    assert constants["OPTIMAL"] == 2
+    assert constants["TIME_LIMIT"] == 9
+    # Gurobi exposes strictly more than the static fallback lists, which is
+    # what the dynamic path is for.
+    assert len(constants) >= len(_STATUS_NAMES)
+
+
+def test_codes_outside_the_static_table_still_resolve():
+    # 18 and 19 exist in current Gurobi. They resolve through whichever
+    # path is live, so this stays true if the fallback is ever trimmed.
+    assert _status_name(18) == "LOCALLY_OPTIMAL"
+    assert _status_name(19) == "LOCALLY_INFEASIBLE"
+
+
+def test_static_fallback_agrees_with_gurobi():
+    # The fallback is only correct if it matches what gurobipy reports; a
+    # drifted table would mislabel a status when the dynamic path is
+    # unavailable (gurobipy absent).
+    constants = _gurobi_status_constants()
+    by_code = {code: name for name, code in constants.items()}
+
+    for code, name in _STATUS_NAMES.items():
+        assert by_code[code] == name, f"fallback disagrees on code {code}"
+
+
+def test_an_unknown_status_code_is_labelled_as_unrecognised():
+    name = _status_name(999)
+
+    assert "999" in name
+    assert name != "999"          # must not masquerade as a status name
+    assert "UNRECOGNISED" in name.upper()
+
+
+def test_gurobi_infinity_never_reaches_the_output_as_a_number():
+    # MIPGap returns 1e100 when the incumbent objective is zero or no bound
+    # exists. Serialized naively that is an enormous but ordinary-looking
+    # float, indistinguishable from a real (catastrophic) gap.
+    assert _finite_or_none(1e100) is None
+    assert _finite_or_none(-1e100) is None
+    assert _finite_or_none(float("inf")) is None
+    assert _finite_or_none(float("nan")) is None
+    assert _finite_or_none(None) is None
+    assert _finite_or_none(0.4) == 0.4
+
+
+def test_unavailable_relative_gap_is_reported_as_null_with_a_reason():
+    block = _gap_block(objective=0.0, best_bound=0.0, raw_gap=1e100)
+
+    assert block["attained_mip_gap"] is None
+    assert block["attained_mip_gap_unavailable_reason"]
+    # The absolute gap survives precisely where the relative one does not.
+    assert block["absolute_gap"] == 0.0
+
+
+def test_absolute_gap_is_recorded_alongside_a_usable_relative_gap():
+    block = _gap_block(objective=10.0, best_bound=8.0, raw_gap=0.2)
+
+    assert block["attained_mip_gap"] == 0.2
+    assert block["attained_mip_gap_unavailable_reason"] is None
+    assert block["absolute_gap"] == 2.0
+
+
+def test_absolute_gap_is_null_when_there_is_no_bound():
+    # An INFEASIBLE model has no bound to report, so neither gap exists.
+    block = _gap_block(objective=None, best_bound=None, raw_gap=None)
+
+    assert block["attained_mip_gap"] is None
+    assert block["absolute_gap"] is None
+
+
+def test_no_incumbent_gap_message_does_not_point_at_another_null():
+    # With no incumbent the absolute gap is necessarily null too, so
+    # telling the reader to "read absolute_gap instead" sends them nowhere.
+    no_incumbent = _gap_block(objective=None, best_bound=-158.9, raw_gap=1e100)
+    assert no_incumbent["absolute_gap"] is None
+    assert "absolute_gap" not in no_incumbent["attained_mip_gap_unavailable_reason"]
+    assert "best_bound" in no_incumbent["attained_mip_gap_unavailable_reason"]
+
+    # With an incumbent the absolute gap IS available, so it is offered.
+    with_incumbent = _gap_block(objective=0.0, best_bound=0.0, raw_gap=1e100)
+    assert with_incumbent["absolute_gap"] == 0.0
+    assert "absolute_gap" in with_incumbent["attained_mip_gap_unavailable_reason"]
+
+
+def test_static_fallback_is_used_when_the_dynamic_lookup_is_unavailable(monkeypatch):
+    # gurobipy absent, or a release that stops exposing GRB.Status the way
+    # we read it. Every other status test runs with the dynamic path live,
+    # so without this the fallback table is never actually exercised -- the
+    # same blind spot that let the vars()-based lookup fail silently.
+    import baseline.milp as milp
+
+    monkeypatch.setattr(milp, "_gurobi_status_constants", dict)
+
+    assert milp._status_name(2) == "OPTIMAL"
+    assert milp._status_name(9) == "TIME_LIMIT"
+    assert milp._status_name(17) == "MEM_LIMIT"
+    assert milp._status_name(19) == "LOCALLY_INFEASIBLE"
+    # Still labelled, not returned bare, when neither source knows it.
+    assert "UNRECOGNISED" in milp._status_name(999).upper()
+
+
+# ---------------------------------------------------------------------------
+# The failure type survives the outer loop
+# ---------------------------------------------------------------------------
+
+def test_no_incumbent_error_is_an_inner_solve_failure():
+    # The outer loop catches InnerSolveFailure without importing baseline
+    # (islanding must not depend on it). If this subtyping is ever broken,
+    # the failure escapes solve() unenriched and the run script records the
+    # ORIGINAL problem's sample counts beside augmented diagnostics.
+    assert issubclass(NoIncumbentError, InnerSolveFailure)
+
+
+def test_no_incumbent_error_keeps_its_type_and_info_through_solve(two_node_problem):
+    # The loop re-raises the SAME object, so `except NoIncumbentError` in
+    # the run script still catches it after enrichment.
+    raised = NoIncumbentError(
+        "no feasible solution", info={"status": "TIME_LIMIT", "n_vars": 7}
+    )
+
+    def failing_solver(problem, **kwargs):
+        raise raised
+
+    with pytest.raises(NoIncumbentError) as caught:
+        solve(two_node_problem, max_outer_iterations=3, inner_solver=failing_solver)
+
+    assert caught.value is raised                     # same object
+    assert isinstance(caught.value, NoIncumbentError)  # not widened
+    assert caught.value.info["n_vars"] == 7            # solver diagnostics kept
+    assert caught.value.outer_state is not None        # loop state attached
+    assert caught.value.outer_state["failed_pass"] == 0

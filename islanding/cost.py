@@ -1,10 +1,19 @@
-"""Cost function F = F1 + F2 + F3 - F4 for a decoded islanding strategy.
+"""Cost function F for a decoded islanding strategy.
 
 Operates on decoded original-graph quantities (stable islands, unstable
 islands, reconnected edges) plus per-instance cost data and algorithm
 parameters. See docs/cost_function_spec.md for the full math.
+
+The production formulation is F = F1 + F3 - F4 + F5 + F6. F2 (the cost of
+edges inside unstable islands) was DROPPED from it -- not disabled pending
+a decision. `F` keeps a generic six-argument signature, f2 slot included,
+for compatibility with the spec's published form and with the tests that
+still exercise the term; every production caller passes 0.0 there.
+`f2_unstable_edges` likewise remains here, computed by nothing in the
+pipeline.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Callable
 
@@ -13,10 +22,71 @@ import numpy as np
 from islanding.counterexample import linear_counterexample
 
 
+
+# Validation below raises ValueError, never `assert`. These checks are what
+# make utils.save's persisted `proof_basis` -- "objective is nonnegative;
+# zero attained" -- a true statement rather than an aspiration, and
+# `python -O` strips assert statements entirely. A claim that survives into
+# a saved artifact must not rest on a check that disappears under an
+# interpreter flag.
+
+
+def _require_finite(name, value):
+    """`value` as a float, rejecting NaN and infinities.
+
+    Nonfinite parameters do not merely produce odd numbers: inf * 0 is NaN,
+    so a single infinite coefficient makes F undefined rather than large,
+    and every downstream comparison (including "is the objective zero?")
+    silently returns False.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a real number; got {value!r}") from None
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be finite; got {number!r}")
+    return number
+
+
+def _validate_costs(kind, costs):
+    """Every cost must be finite and nonnegative.
+
+    NaN needs the explicit finiteness check: `nan < 0` is False, so a NaN
+    cost passes any comparison-based test and then poisons every sum it
+    enters.
+    """
+    for key, value in costs.items():
+        number = _require_finite(f"{kind} cost for {key!r}", value)
+        if number < 0:
+            raise ValueError(
+                f"{kind} costs must be nonnegative; got {number!r} for "
+                f"{key!r}. A negative cost breaks F_hat >= 0, on which the "
+                "zero-objective optimality proof depends."
+            )
+
+
 @dataclass(frozen=True)
 class CostData:
+    """Per-instance node and edge costs. Both must be NONNEGATIVE.
+
+    Not a stylistic constraint. F1 and F3 are nonnegative sums of these,
+    and F3 - F4 >= (kappa_op - kappa_rec) * (reconnected cost) >= 0 only
+    when the costs are, so nonnegativity is what makes F_hat >= 0 -- and
+    therefore what makes local_search's "zero_objective" exit an actual
+    proof of global optimality rather than a claim about the trees it
+    happened to visit. With a negative edge cost a two-node instance can
+    report zero while a one-swap partition reaches -1.
+
+    Validated here rather than trusted, so utils.save.save_result can
+    record that proof as a flag. See also AlgorithmConfig's kappa_op > 0.
+    """
+
     node_costs: dict
     edge_costs: dict
+
+    def __post_init__(self):
+        _validate_costs("node", self.node_costs)
+        _validate_costs("edge", self.edge_costs)
 
 
 @dataclass(frozen=True)
@@ -36,24 +106,55 @@ class AlgorithmConfig:
     swap_supernode_edges: bool = True
 
     def __post_init__(self):
-        assert self.kappa_op > self.kappa_rec
+        # Finiteness first: every comparison below returns False on a NaN,
+        # so an unchecked NaN would pass the whole block. The six the
+        # objective is linear in (kappa_op, kappa_rec, alpha_1, alpha_2,
+        # k_1, k_2) matter most, but beta/gamma/epsilon are the same class
+        # -- an infinite sampling radius or improvement threshold makes the
+        # objective just as undefined -- so all nine are checked here.
+        for name in ("kappa_op", "kappa_rec", "alpha_1", "alpha_2",
+                     "beta", "gamma", "k_1", "k_2", "epsilon"):
+            _require_finite(name, getattr(self, name))
+
+        if not self.kappa_op > self.kappa_rec:
+            raise ValueError(
+                f"kappa_op must exceed kappa_rec; got kappa_op="
+                f"{self.kappa_op!r}, kappa_rec={self.kappa_rec!r}"
+            )
+        # kappa_op > kappa_rec alone permits a negative kappa_op, which
+        # would make F3 (a nonnegative cut cost scaled by kappa_op)
+        # negative and break F_hat >= 0. Together with nonnegative
+        # CostData this is what the zero-objective optimality proof needs:
+        # F3 - F4 >= (kappa_op - kappa_rec) * (reconnected cost) >= 0,
+        # since E^rec is a subset of the cut edges.
+        if not self.kappa_op > 0:
+            raise ValueError(
+                f"kappa_op must be positive; got {self.kappa_op!r}. A "
+                "nonpositive kappa_op makes F3 negative and breaks "
+                "F_hat >= 0, on which the zero-objective optimality proof "
+                "depends."
+            )
         # Cross-constraint from the revised F6 theory (spec section 15):
         # k_1 >= k_2 > 0. Note >=, not strict -- k_1 == k_2 is allowed, and
         # makes F6's Part 4 vanish.
-        assert self.k_1 >= self.k_2 > 0
-        assert self.alpha_1 > 0
-        assert self.beta > 0
-        assert self.k_1 > 0
-        assert self.P_1 > 0
-        assert self.alpha_2 > 0
-        assert self.gamma > 0
-        assert self.k_2 > 0
-        assert self.P_2 > 0
-        assert self.epsilon > 0
+        if not self.k_1 >= self.k_2 > 0:
+            raise ValueError(
+                f"require k_1 >= k_2 > 0; got k_1={self.k_1!r}, "
+                f"k_2={self.k_2!r}"
+            )
+        for name in ("alpha_1", "beta", "k_1", "alpha_2", "gamma", "k_2",
+                     "P_1", "P_2", "epsilon"):
+            value = getattr(self, name)
+            if not value > 0:
+                raise ValueError(f"{name} must be positive; got {value!r}")
         # max_iterations == 0 is a legal, meaningful config (immediate stop
         # with reason="max_iterations"), exercised by local_search_spec.md
         # section 7 assertion 4 -- so this is >= 0, not strictly positive.
-        assert self.max_iterations >= 0
+        if not self.max_iterations >= 0:
+            raise ValueError(
+                f"max_iterations must be nonnegative; got "
+                f"{self.max_iterations!r}"
+            )
 
 
 def canon(edge):

@@ -41,6 +41,10 @@ SETUP = LINEAR_20
 # solver produced the number rather than presenting it as a bare "F".
 INNER_METHOD = "local search"
 
+# Run parameters, named so the saved result records exactly what ran.
+SEED = 0
+MAX_OUTER_ITERATIONS = 10
+
 
 def _lambda_min(nodes, edges):
     M = build_M(nodes, edges, SETUP.node_weights, SETUP.edge_weights)
@@ -53,7 +57,7 @@ def _induced_edges(topology, nodes):
 
 def main():
     topology = build_topology()
-    problem = build_problem(SETUP, topology, seed=0, config=build_config())
+    problem = build_problem(SETUP, topology, seed=SEED, config=build_config())
 
     print(f"Setup: {SETUP.name}")
     print(f"Faulty nodes: {faulty_nodes(SETUP)}")
@@ -63,7 +67,7 @@ def main():
     config = problem.config
 
     start = time.perf_counter()
-    result = solve(problem, max_outer_iterations=10)
+    result = solve(problem, max_outer_iterations=MAX_OUTER_ITERATIONS)
     elapsed = time.perf_counter() - start
 
     # The partition comes straight off the result -- the outer loop no
@@ -74,7 +78,12 @@ def main():
     components = build_reconnected_components(stable, reconnected, topology)
 
     print("=== Solve ===")
-    print(f"reason:                     {result.reason}")
+    # `reason` is the STABILITY ORACLE's verdict on the returned partition,
+    # never an optimisation status. "converged" says a partition survived
+    # the counterexample search; it says nothing about how well, or how
+    # provably, the inner problem was solved on the pass that produced it.
+    print(f"reason:                     {result.reason}"
+          f"   -- stability oracle's verdict, not an optimisation status")
     # Two counts, not one: they differ by one when the loop converges (the
     # final solve found nothing to add) and are equal when it hits the cap.
     print(f"inner solves:               {result.inner_solve_count}")
@@ -236,6 +245,9 @@ def main():
 
     path = save_result(
         result, problem, example_name="linear_20node",
+        method=INNER_METHOD,
+        seed=SEED,
+        max_outer_iterations=MAX_OUTER_ITERATIONS,
         runtime_seconds=elapsed,
         setup_name=SETUP.name,
         faulty_nodes=faulty_nodes(SETUP),
@@ -244,9 +256,11 @@ def main():
         component_lambda_min=component_lambda_min,
         cost_terms={
             "f1": f1, "f3": f3, "f4": f4, "f5": f5, "f6": f6,
-            # Recorded separately, each with its basis: only the economic
-            # cost is comparable across methods, and the penalised total
-            # is meaningless without the K it was computed on.
+            # Recorded separately, each with its basis. The economic
+            # cost is unconditionally sample-independent. The penalised
+            # total is comparable only as a score on an identical common
+            # sample set -- never as an optimality-gap measurement -- and
+            # is uninterpretable without the K it was computed on.
             "economic_cost": economic,
             "total_with_penalties": total,
             "K_phi": initial_K_phi, "K_psi": initial_K_psi,
