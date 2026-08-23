@@ -11,8 +11,11 @@ The plane is 6x6 rather than the 50-node case's 10x10. That is the whole
 point of the size: at the same edge radius, node density -- and hence
 average degree -- has to match, or a runtime comparison between the two
 cases measures density rather than size. The 50-node case has 136 edges
-over 50 nodes (average degree ~5.4), and the runtime bottleneck scales
-with edge count, not node count.
+over 50 nodes (average degree ~5.4), and both dimensions bear on cost: edge count drives the
+certificate families and the local search's neighbourhood, while node
+count drives the MILP's assignment binaries and the sample arrays.
+Holding density fixed is what keeps a cross-case comparison about
+size rather than about shape.
 
 Usage:
     python examples/linear_20node/generate_linear_20node.py [seed] [n_faults]

@@ -41,7 +41,8 @@ across methods: no sample set enters it.
 This is the largest case with a MILP counterpart. Its INITIAL model --
 first pass, at K_phi = K_psi = 20 -- is 38,728 variables, 577 binaries and
 109,849 constraints: 3.6x the 20-node case's variables but only 2.1x its
-binaries, which are what governs branch-and-bound difficulty (see
+binaries -- the size figure that tracks branch-and-bound difficulty
+most closely, though it does not govern it (see
 build_milp_config in examples/linear_30node/config.py). The model then
 GROWS with the sample sets, one sigma row per slot per witness, so a
 converging run ends larger than it started. A pass hitting the time limit

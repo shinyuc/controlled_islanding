@@ -38,6 +38,7 @@ from baseline.milp import milp_solver
 from examples.linear_10node import run_linear_10node, run_baseline_10node
 from examples.linear_20node import run_linear_20node, run_baseline_20node
 from examples.linear_30node import run_linear_30node, run_baseline_30node
+from examples.linear_40node import run_linear_40node, run_baseline_40node
 from examples.linear_50node import run_linear_50node
 
 
@@ -46,6 +47,7 @@ PAIRS = [
     ("10node", run_linear_10node, run_baseline_10node),
     ("20node", run_linear_20node, run_baseline_20node),
     ("30node", run_linear_30node, run_baseline_30node),
+    ("40node", run_linear_40node, run_baseline_40node),
 ]
 PAIR_IDS = [pair[0] for pair in PAIRS]
 
@@ -63,6 +65,8 @@ SCRIPTS = [
     ("20node-milp", run_baseline_20node),
     ("30node-local", run_linear_30node),
     ("30node-milp", run_baseline_30node),
+    ("40node-local", run_linear_40node),
+    ("40node-milp", run_baseline_40node),
     ("50node-local", run_linear_50node),
 ]
 SCRIPT_IDS = [entry[0] for entry in SCRIPTS]

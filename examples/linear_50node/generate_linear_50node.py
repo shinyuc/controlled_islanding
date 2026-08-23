@@ -9,7 +9,9 @@ docs/example_linear_50node_spec.md sections 2-3 for the full spec.
 Usage:
     python examples/linear_50node/generate_linear_50node.py [seed] [n_faults]
 
-Defaults: seed=0, n_faults=7.
+Defaults: seed=1 (the seed the committed artifact was generated with,
+so the no-argument command reproduces it exactly -- checked byte for byte
+by tests/test_examples/test_linear_50node.py), n_faults=7.
 """
 
 import sys
@@ -24,7 +26,18 @@ OUTPUT_PATH = HERE / "linear_50node_topology.py"
 N_NODES = 50
 PLANE_SIZE = 10.0
 EDGE_RADIUS = 2.0
-DEFAULT_SEED = 0
+# The seed the COMMITTED artefact was generated with.
+#
+# Seed 0 also reproduces it today, because seed 0's draw happens to be
+# DISCONNECTED and the retry loop then advances to 1. That is an incidental
+# property of this draw, not a guarantee: a NumPy RNG change, a different
+# node count or a modified edge radius could make seed 0's draw connected,
+# at which point the no-argument command would silently produce a DIFFERENT
+# topology rather than failing. Naming 1 directly removes that dependency,
+# and makes all three generators consistent -- the 30- and 40-node ones
+# have to name their seed outright, since theirs raises on the wrong draw
+# rather than quietly succeeding.
+DEFAULT_SEED = 1
 DEFAULT_N_FAULTS = 7
 
 

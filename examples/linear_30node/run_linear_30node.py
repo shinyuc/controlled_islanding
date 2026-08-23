@@ -88,9 +88,11 @@ def main():
     config = problem.config
 
     start = time.perf_counter()
-    # 10 rather than the 10-/50-node scripts' 20: the 20-node case needed
-    # 6 outer passes to converge, so this leaves headroom without letting
-    # a non-converging run go on indefinitely.
+    # 10 rather than the 10-/50-node scripts' 20: the 20-node case
+    # converged after SEVEN inner solves and six augmentations, so this
+    # leaves headroom without letting a non-converging run go on
+    # indefinitely. (Seven and six, not "6 passes" -- the two counts differ
+    # by one on the convergence path; see islanding/outer_loop.py.)
     result = solve(problem, max_outer_iterations=MAX_OUTER_ITERATIONS)
     elapsed = time.perf_counter() - start
 

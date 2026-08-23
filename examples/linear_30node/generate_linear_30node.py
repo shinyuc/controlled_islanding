@@ -14,8 +14,11 @@ cases measures density rather than size. Area scales with node count, so
 30/7.75^2 = 0.500 nodes per unit area reproduces the 50-node case's
 50/10^2 = 0.500, and the expected degree at radius 2 is preserved. The
 50-node case has 136 edges over 50 nodes (average degree ~5.4); the
-target here is roughly 82 (= 136 * 30/50). The runtime bottleneck scales
-with edge count, not node count.
+target here is roughly 82 (= 136 * 30/50). Both dimensions bear on cost: edge count drives the
+certificate families and the local search's neighbourhood, while node
+count drives the MILP's assignment binaries and the sample arrays.
+Holding density fixed is what keeps a cross-case comparison about
+size rather than about shape.
 
 Faults are placed EXPLICITLY here (FAULTY_NODES / FAULTY_EDGES below)
 rather than taken as "the first n nodes" like the 20- and 50-node cases.
@@ -27,8 +30,10 @@ bottleneck instead -- see the constants for the reasoning.
 Usage:
     python examples/linear_30node/generate_linear_30node.py [seed]
 
-Default: seed=0. The committed artifact was generated with seed 26, which
-is the draw that hits the target density (82 edges, average degree 5.47).
+Default: seed=26 -- the seed the committed artifact was generated with,
+and the draw that hits the target density (82 edges, average degree 5.47).
+Running with no argument therefore reproduces the artifact exactly, which
+tests/test_examples/test_linear_30node.py checks field by field.
 """
 
 import sys
@@ -43,7 +48,13 @@ OUTPUT_PATH = HERE / "linear_30node_topology.py"
 N_NODES = 30
 PLANE_SIZE = 7.75
 EDGE_RADIUS = 2.0
-DEFAULT_SEED = 0
+# The seed the COMMITTED artefact was generated with, so the documented
+# no-argument command reproduces it. Not 0: seed 0's draw does not contain
+# the edges FAULTY_EDGES names, so generate(0) raises rather than
+# producing anything. The connectivity-retry loop cannot rescue that --
+# it only advances past DISCONNECTED draws, and seed 0's draw is connected,
+# just differently shaped.
+DEFAULT_SEED = 26
 
 # Explicit fault placement, chosen against this topology's structure.
 #
@@ -55,11 +66,19 @@ DEFAULT_SEED = 0
 #
 # FAULTY_EDGES: the crossing edges between the upper cluster
 # {9,10,11,12,18,27,28} and the rest. Exactly five such edges exist --
-# (10,25), (11,22), (11,25), (12,24), (18,24) -- so faulting four of them
-# forces the split while leaving (11,22) healthy as the single
-# reconnection candidate. That is the point of the placement: it is what
-# gives the search two distinct stable islands with an eligible cut edge
-# between them, which is the precondition for E^rec to be non-empty.
+# (10,25), (11,22), (11,25), (12,24), (18,24) -- and four are faulted,
+# leaving (11,22) healthy as the single reconnection candidate.
+#
+# What this CREATES is a feasible reconnection opportunity, not a forced
+# outcome. Faulting four of the five does not force the split: the graph
+# stays connected through the healthy (11,22), and forcing the four faulty
+# endpoint pairs apart does not uniquely determine that the cluster
+# becomes one island. What it does establish is that cutting all five
+# crossings separates the cluster from its complement, so (11,22) joins
+# two candidate islands and would be ELIGIBLE for reconnection -- the
+# precondition for E^rec to be non-empty. Whether either solver selects
+# that partition, and therefore whether F4 and F6 come out nonzero, is an
+# outcome of the search, not a property of the placement.
 FAULTY_NODES = [5, 16]
 FAULTY_EDGES = [(10, 25), (11, 25), (12, 24), (18, 24)]
 

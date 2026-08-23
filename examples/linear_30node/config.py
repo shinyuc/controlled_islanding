@@ -55,10 +55,15 @@ def build_milp_config():
            30     82   38,728       577      109,849
 
     So 3.6x the 20-node variables and 3.7x its rows, but only 2.1x its
-    binaries -- and the binaries are what governs branch-and-bound
-    difficulty (docs/milp_baseline_spec.md section 8). Here that is 465
-    assignment binaries a_ir (r <= i over 30 nodes), 30 slot flags and 82
-    reconnection binaries: 577.
+    binaries: 465 assignment binaries a_ir (r <= i over 30 nodes), 30 slot
+    flags and 82 reconnection binaries, 577 in all.
+
+    The binary count is the size figure that tracks branch-and-bound
+    difficulty most closely (docs/milp_baseline_spec.md section 8), but it
+    does not GOVERN it. Continuous size, row count, LP relaxation
+    tightness and the formulation's own structure all matter, and the
+    growth below is not predictable from any single one of them. Treat the
+    binaries as the best available proxy, not as the explanation.
 
     900 s, up from the 20-node case's 600 s. That is HEADROOM, not a
     measured requirement, and the measurement says so: the first pass of
