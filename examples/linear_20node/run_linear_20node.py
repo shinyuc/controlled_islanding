@@ -26,7 +26,7 @@ from examples.linear_20node.builder import (
 from examples.linear_20node.config import build_config
 from utils.save import save_result
 from islanding.outer_loop import solve
-from islanding.search import build_reconnected_components
+from islanding.search import build_reconnected_components, DEFAULT_TREE_SEED
 from islanding.counterexample import find_counterexamples_for_partition
 from islanding.cost import (
     canon, f1_unstable_nodes, f3_operation_edges,
@@ -42,7 +42,13 @@ SETUP = LINEAR_20
 INNER_METHOD = "local search"
 
 # Run parameters, named so the saved result records exactly what ran.
-SEED = 0
+SAMPLE_SEED = 0
+# SEPARATE from SAMPLE_SEED, which only drives the sample draw. local_search
+# calls initial_spanning_tree() with no seed argument, so the tree start is
+# whatever islanding.search.DEFAULT_TREE_SEED is -- imported rather than
+# duplicated here, so this cannot silently disagree with what actually runs.
+# Every figure this script reports is therefore a SINGLE-START result.
+TREE_INIT_SEED = DEFAULT_TREE_SEED
 MAX_OUTER_ITERATIONS = 10
 
 
@@ -55,9 +61,24 @@ def _induced_edges(topology, nodes):
     return [(u, v) for u, v in topology.edges() if u in nodes and v in nodes]
 
 
+def build_run_problem():
+    """The Problem this script solves, built from the module constants.
+
+    Extracted from main() so the parity tests in
+    tests/test_examples/test_script_parity.py can exercise the REAL
+    construction path. A test that rebuilt the Problem from SETUP,
+    SAMPLE_SEED and build_config() itself would be comparing two
+    reimplementations and would pass even if main() had drifted to a
+    hardcoded seed or a different config builder.
+    """
+    return build_problem(
+        SETUP, build_topology(), seed=SAMPLE_SEED, config=build_config()
+    )
+
+
 def main():
-    topology = build_topology()
-    problem = build_problem(SETUP, topology, seed=SEED, config=build_config())
+    problem = build_run_problem()
+    topology = problem.topology
 
     print(f"Setup: {SETUP.name}")
     print(f"Faulty nodes: {faulty_nodes(SETUP)}")
@@ -102,6 +123,12 @@ def main():
             "the PRE-augmentation sample sets shown above -- the final "
             "pass's witnesses were added but never solved against."
         )
+    print(f"sample seed:                {SAMPLE_SEED}")
+    print(f"tree init seed:             {TREE_INIT_SEED}"
+          f"   -- SINGLE-START result: local_search was initialised from one\n"
+          f"                                tree at this seed, so the figures below are "
+          f"not a\n                                best-of-several and a different start "
+          f"may do better")
     print(f"runtime (s):                {elapsed:.3f}")
     print()
 
@@ -170,10 +197,29 @@ def main():
     # recomputed here on the same initial samples, so the two totals ARE
     # comparable as scores on a common evaluation set. What they do not
     # establish is an inner-solver optimality gap, or a like-for-like
-    # comparison of what each method actually optimised: the two converged
-    # after different numbers of augmentation rounds, so each selected its
-    # partition against a different sampled objective from the one scored
-    # here.
+    # comparison of what each method actually optimised.
+    #
+    # Two methods CAN follow different witness trajectories: each pass
+    # draws its counterexamples from its own partition, so once the
+    # witness ARRAYS they append differ on any pass, their sampled
+    # problems diverge from there on. Nothing forces that. Differing
+    # partitions are not sufficient on their own -- two different
+    # partitions can yield the same witnesses, and then the augmented
+    # sample sets stay identical -- and two methods that returned the same
+    # partitions throughout would be answers to the same sampled problem.
+    #
+    # It is not settled by the round counts either. On the recorded
+    # 20-node run both methods took 7 solves and 6 augmentations, and
+    # their sample counts AGREED for five passes before splitting:
+    # 20, 23, 26, 27, 28, 31, 32 (local search) versus
+    # 20, 23, 26, 27, 28, 30, 31 (MILP). So equal round counts do not
+    # imply equal sample sets, and an early agreement does not imply a
+    # lasting one.
+    #
+    # Nor can the saved pass_history settle it the other way: it records
+    # K values and witness COUNTS, not witness identities, so two runs
+    # with identical histories may still have appended different arrays.
+    # Equal histories are evidence of nothing stronger than equal counts.
     economic = F(f1, 0.0, f3, f4)
     total = F(f1, 0.0, f3, f4, f5, f6)
     print(f"Economic cost (F1 + F3 - F4):    {economic}"
@@ -246,7 +292,8 @@ def main():
     path = save_result(
         result, problem, example_name="linear_20node",
         method=INNER_METHOD,
-        seed=SEED,
+        sample_seed=SAMPLE_SEED,
+        tree_init_seed=TREE_INIT_SEED,
         max_outer_iterations=MAX_OUTER_ITERATIONS,
         runtime_seconds=elapsed,
         setup_name=SETUP.name,

@@ -82,6 +82,63 @@ def _optimality_scope(method, result):
     )
 
 
+KNOWN_METHODS = (LOCAL_SEARCH, MILP)
+
+
+def _check_method(method):
+    """Reject a method string the schema has no definition for.
+
+    Not permissiveness for its own sake -- an unknown string is silently
+    MISHANDLED rather than merely unvalidated. `_method_block` dispatches
+    on `method == MILP` and treats everything else as local search, so a
+    typo like "MILP " (trailing space) would slip past the seed
+    consistency check AND be written out with a local-search method block:
+    `final_reason` and `final_iterations` read off a MILP info dict that
+    has neither, and no status, bound or gap recorded at all.
+
+    A genuinely new solver is welcome, but it needs its own branch in
+    `_method_block` and its own row in the seed contract first. Failing
+    here is what forces that.
+    """
+    if method not in KNOWN_METHODS:
+        raise ValueError(
+            f"unknown method {method!r}; expected one of "
+            f"{list(KNOWN_METHODS)}. A new solver needs a method block and "
+            "a tree-seed contract defined in utils/save.py before its "
+            "results can be recorded -- writing it out as local search "
+            "would silently mislabel every diagnostic."
+        )
+
+
+def _check_seed_consistency(method, tree_init_seed):
+    """Reject a method/tree-seed combination the schema cannot mean.
+
+    The schema documents tree_init_seed as None for a solver that
+    initialises no tree, and as the actual start for one that does.
+    Accepting the contradictions silently would put a fabricated fact in
+    an artifact that outlives the run: a MILP result stamped with a tree
+    seed names a start that never happened, and a local-search result
+    stamped None hides the single-start degree of freedom the field
+    exists to expose.
+
+    Both known methods are covered; `_check_method` has already rejected
+    anything else, so there is no unchecked third case.
+    """
+    if method == MILP and tree_init_seed is not None:
+        raise ValueError(
+            f"method={MILP!r} with tree_init_seed={tree_init_seed!r}: the "
+            "MILP initialises no spanning tree, so there is no start to "
+            "record. Pass None."
+        )
+    if method == LOCAL_SEARCH and tree_init_seed is None:
+        raise ValueError(
+            f"method={LOCAL_SEARCH!r} with tree_init_seed=None: local "
+            "search is initialised from exactly one tree, and which one "
+            "is part of what the result means. Pass the seed it used "
+            "(islanding.search.DEFAULT_TREE_SEED unless overridden)."
+        )
+
+
 def _method_block(method, result):
     """Solver identity plus the diagnostics that make a run interpretable.
 
@@ -124,6 +181,8 @@ def _method_block(method, result):
             },
         })
     else:
+        # LOCAL_SEARCH: the only remaining possibility, since _check_method
+        # rejects anything outside KNOWN_METHODS before we get here.
         reason = info.get("reason")
         # Derived, not hard-coded: local search DOES prove optimality when
         # it exits on a zero objective. The evidence was already in
@@ -174,7 +233,8 @@ def save_result(
     example_name,
     *,
     method,
-    seed,
+    sample_seed,
+    tree_init_seed,
     max_outer_iterations,
     runtime_seconds,
     setup_name,
@@ -199,8 +259,17 @@ def save_result(
     - `method`: which inner solver produced this, LOCAL_SEARCH or MILP.
       Drives the method block, which carries the status/gap/bound a MILP
       run cannot be interpreted without.
-    - `seed`, `max_outer_iterations`: the two run parameters not already
-      captured by the AlgorithmConfig, both needed to reproduce the run.
+    - `sample_seed`, `tree_init_seed`, `max_outer_iterations`: the run
+      parameters not already captured by the AlgorithmConfig, all needed to
+      reproduce the run. The two seeds are SEPARATE knobs and were never
+      one: `sample_seed` drives `build_problem`'s sample draw, while
+      `tree_init_seed` is what `initial_spanning_tree` uses to pick the
+      local search's starting tree (`islanding.search.DEFAULT_TREE_SEED`).
+      They happen to both be 0 today, which is exactly why recording one
+      number would look sufficient and quietly hide a whole degree of
+      freedom -- every local-search result is a SINGLE-START result at its
+      recorded `tree_init_seed`. Pass `tree_init_seed=None` for a solver
+      that initialises no tree (the MILP).
     - `setup_name`, `faulty_nodes`, `faulty_edges`: which instance this is.
     - `island_lambda_min` / `component_lambda_min`: sequences of floats
       aligned by INDEX with result.stable_islands and with the components
@@ -231,6 +300,9 @@ def save_result(
     land inside the project regardless of where the script is launched
     from. Pass an explicit results_dir to override.
     """
+    _check_method(method)
+    _check_seed_consistency(method, tree_init_seed)
+
     missing = [key for key in COST_KEYS if key not in cost_terms]
     if missing:
         raise ValueError(f"cost_terms is missing {missing}; expected {list(COST_KEYS)}")
@@ -285,7 +357,10 @@ def save_result(
         "outcome": "solved",
         "runtime_seconds": float(runtime_seconds),
         "method": _method_block(method, result),
-        "seed": _plain(seed),
+        "sample_seed": _plain(sample_seed),
+        # None for a solver with no tree to initialise. Recorded separately
+        # from sample_seed because they are independent knobs.
+        "tree_init_seed": _plain(tree_init_seed),
         "max_outer_iterations": _plain(max_outer_iterations),
         "setup": {
             "name": setup_name,
@@ -366,7 +441,8 @@ def save_failure_result(
     example_name,
     *,
     method,
-    seed,
+    sample_seed,
+    tree_init_seed,
     max_outer_iterations,
     runtime_seconds,
     setup_name,
@@ -404,6 +480,9 @@ def save_failure_result(
     than two schemas that each mean one thing. `outcome` tells them
     apart -- "solved" there, "no_incumbent" here.
     """
+    _check_method(method)
+    _check_seed_consistency(method, tree_init_seed)
+
     if results_dir is None:
         results_dir = REPO_ROOT / "results"
     os.makedirs(results_dir, exist_ok=True)
@@ -476,7 +555,10 @@ def save_failure_result(
             {key: _plain(value) for key, value in entry.items()}
             for entry in state.get("pass_history", ())
         ],
-        "seed": _plain(seed),
+        "sample_seed": _plain(sample_seed),
+        # None for a solver with no tree to initialise. Recorded separately
+        # from sample_seed because they are independent knobs.
+        "tree_init_seed": _plain(tree_init_seed),
         "max_outer_iterations": _plain(max_outer_iterations),
         "setup": {
             "name": setup_name,

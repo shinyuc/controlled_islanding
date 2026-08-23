@@ -6,10 +6,22 @@ differs. run_linear_10node.py runs the local search; this runs the MILP of
 docs/milp_baseline_spec.md. Run both and the two reports are directly
 comparable line for line, which is the whole point of the baseline.
 
-Not a test -- makes no assertions. The MILP is exact (to the gap) on the
-inner problem, so its total F should be <= the local search's on the same
-sample sets; it is not guaranteed equal, because the two methods grow
-DIFFERENT sample sets as their outer passes diverge.
+Not a test -- makes no assertions. On a SINGLE fixed Problem, the EXACT
+global optimum of that sampled MILP is <= any value the local search can
+reach on the same Problem. Gurobi does not return that exact optimum: a
+run declared OPTIMAL gives an incumbent within the requested MIP gap of
+the proven dual bound, i.e. the interval [best_bound, incumbent] around
+it. So with a nonzero requested gap the reported incumbent can sit
+slightly above an independently found feasible solution without
+contradicting the statement above -- the bound is the side that carries
+the guarantee.
+
+That inequality says nothing about the two runs' FINAL results, which are
+answers to different sampled problems whenever the methods' witness
+trajectories diverge. The economic cost (F1 + F3 - F4) is the figure that
+compares cleanly across methods: no sample set enters it. See
+run_baseline_20node.py's docstring for the three wrong readings this
+inequality invites.
 
 Two things differ from the local-search script, both consequences of the
 inner solver:
@@ -76,7 +88,10 @@ INNER_METHOD = "MILP"
 MAX_OUTER_ITERATIONS = 20
 
 # Named so the saved result records exactly what ran.
-SEED = 0
+SAMPLE_SEED = 0
+# The MILP initialises no spanning tree, so there is no second seed to
+# record. None, not 0 -- writing 0 would imply a start that never happened.
+TREE_INIT_SEED = None
 
 
 def _lambda_min(nodes, edges):
@@ -88,10 +103,23 @@ def _induced_edges(topology, nodes):
     return [(u, v) for u, v in topology.edges() if u in nodes and v in nodes]
 
 
-def main():
-    problem = build_problem(
-        SETUP, build_topology(), seed=SEED, config=build_config()
+def build_run_problem():
+    """The Problem this script solves, built from the module constants.
+
+    Extracted from main() so the parity tests in
+    tests/test_examples/test_script_parity.py can exercise the REAL
+    construction path. A test that rebuilt the Problem from SETUP,
+    SAMPLE_SEED and build_config() itself would be comparing two
+    reimplementations and would pass even if main() had drifted to a
+    hardcoded seed or a different config builder.
+    """
+    return build_problem(
+        SETUP, build_topology(), seed=SAMPLE_SEED, config=build_config()
     )
+
+
+def main():
+    problem = build_run_problem()
     topology = problem.topology
     config = problem.config
 
@@ -119,7 +147,8 @@ def main():
         path = save_failure_result(
             "linear_10node_milp",
             method=INNER_METHOD,
-            seed=SEED,
+            sample_seed=SAMPLE_SEED,
+        tree_init_seed=TREE_INIT_SEED,
             max_outer_iterations=MAX_OUTER_ITERATIONS,
             runtime_seconds=elapsed,
             setup_name=SETUP.name,
@@ -171,6 +200,9 @@ def main():
             "the PRE-augmentation sample sets shown above -- the final "
             "pass's witnesses were added but never solved against."
         )
+    print(f"sample seed:                {SAMPLE_SEED}")
+    print(f"tree init seed:             {TREE_INIT_SEED}"
+          f"   -- the MILP initialises no tree")
     print(f"runtime (s):                {elapsed:.3f}")
     print()
 
@@ -297,10 +329,29 @@ def main():
     # recomputed here on the same initial samples, so the two totals ARE
     # comparable as scores on a common evaluation set. What they do not
     # establish is an inner-solver optimality gap, or a like-for-like
-    # comparison of what each method actually optimised: the two converged
-    # after different numbers of augmentation rounds, so each selected its
-    # partition against a different sampled objective from the one scored
-    # here.
+    # comparison of what each method actually optimised.
+    #
+    # Two methods CAN follow different witness trajectories: each pass
+    # draws its counterexamples from its own partition, so once the
+    # witness ARRAYS they append differ on any pass, their sampled
+    # problems diverge from there on. Nothing forces that. Differing
+    # partitions are not sufficient on their own -- two different
+    # partitions can yield the same witnesses, and then the augmented
+    # sample sets stay identical -- and two methods that returned the same
+    # partitions throughout would be answers to the same sampled problem.
+    #
+    # It is not settled by the round counts either. On the recorded
+    # 20-node run both methods took 7 solves and 6 augmentations, and
+    # their sample counts AGREED for five passes before splitting:
+    # 20, 23, 26, 27, 28, 31, 32 (local search) versus
+    # 20, 23, 26, 27, 28, 30, 31 (MILP). So equal round counts do not
+    # imply equal sample sets, and an early agreement does not imply a
+    # lasting one.
+    #
+    # Nor can the saved pass_history settle it the other way: it records
+    # K values and witness COUNTS, not witness identities, so two runs
+    # with identical histories may still have appended different arrays.
+    # Equal histories are evidence of nothing stronger than equal counts.
     economic = F(f1, 0.0, f3, f4)
     total = F(f1, 0.0, f3, f4, f5, f6)
     print(f"Economic cost (F1 + F3 - F4):    {economic}"
@@ -373,7 +424,8 @@ def main():
     path = save_result(
         result, problem, example_name="linear_10node_milp",
         method=INNER_METHOD,
-        seed=SEED,
+        sample_seed=SAMPLE_SEED,
+        tree_init_seed=TREE_INIT_SEED,
         max_outer_iterations=MAX_OUTER_ITERATIONS,
         runtime_seconds=elapsed,
         setup_name=SETUP.name,

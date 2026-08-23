@@ -67,10 +67,17 @@ _COST_TERMS = {
 }
 
 
-def _save(tmp_path, result, method):
+def _save(tmp_path, result, method, tree_init_seed="auto"):
+    # Derived from the method by default: the MILP initialises no tree, so
+    # its only consistent value is None. The helper used to hardcode 0 for
+    # both, writing a MILP result stamped with a tree start that never
+    # happened -- which save_result now rejects outright.
+    if tree_init_seed == "auto":
+        tree_init_seed = None if method == MILP else 0
     path = save_result(
         result, _problem(), example_name="fixture",
-        method=method, seed=0, max_outer_iterations=10,
+        method=method, sample_seed=0, tree_init_seed=tree_init_seed,
+        max_outer_iterations=10,
         runtime_seconds=1.5,
         setup_name="fixture_setup", faulty_nodes=[1], faulty_edges=[(1, 2)],
         island_lambda_min=[1.0],       # one stable island
@@ -235,7 +242,8 @@ def test_a_run_with_no_incumbent_still_writes_a_result(tmp_path):
         "incumbent": None,
     }
     path = save_failure_result(
-        "fixture", method=MILP, seed=0, max_outer_iterations=10,
+        "fixture", method=MILP, sample_seed=0, tree_init_seed=None,
+        max_outer_iterations=10,
         runtime_seconds=0.06, setup_name="fixture_setup",
         faulty_nodes=[1], faulty_edges=[(1, 2)],
         problem=_problem(), info=info,
@@ -257,7 +265,10 @@ def test_a_run_with_no_incumbent_still_writes_a_result(tmp_path):
     assert payload["method"]["best_bound"]["value"] == -158.9
     assert payload["method"]["n_vars"] == 2491
     assert payload["runtime_seconds"] == 0.06
-    assert payload["seed"] == 0
+    assert payload["sample_seed"] == 0
+    # None, not 0: the MILP initialises no tree, and writing 0 would imply
+    # a start that never happened.
+    assert payload["tree_init_seed"] is None
     assert payload["config"]["k_1"] == 0.2
 
 
@@ -271,12 +282,23 @@ def test_solved_and_no_incumbent_payloads_are_discriminated(tmp_path):
 
 
 def test_run_parameters_are_recorded(tmp_path):
-    # seed and max_outer_iterations are not in the AlgorithmConfig, so
-    # without these a saved result cannot be reproduced.
-    payload = _save(tmp_path, _result(_MILP_OPTIMAL), MILP)
+    # The seeds and max_outer_iterations are not in the AlgorithmConfig, so
+    # without these a saved result cannot be reproduced. The two seeds are
+    # recorded separately: they are independent knobs that merely happen to
+    # both be 0 in the shipped configs, so a single field would hide the
+    # tree-initialisation degree of freedom entirely.
+    milp = _save(tmp_path, _result(_MILP_OPTIMAL), MILP)
+    local = _save(tmp_path, _result({"reason": "local_optimum", "iterations": 3}),
+                  LOCAL_SEARCH)
 
-    assert payload["seed"] == 0
-    assert payload["max_outer_iterations"] == 10
+    assert milp["sample_seed"] == 0
+    assert local["sample_seed"] == 0
+    # The two seeds are independent, and the tree seed's value depends on
+    # whether the method has a tree at all.
+    assert milp["tree_init_seed"] is None
+    assert local["tree_init_seed"] == 0
+    assert "seed" not in milp             # the ambiguous single field is gone
+    assert milp["max_outer_iterations"] == 10
 
 
 def test_cost_terms_missing_a_key_is_rejected(tmp_path):
@@ -286,7 +308,8 @@ def test_cost_terms_missing_a_key_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="K_phi"):
         save_result(
             result, _problem(), example_name="fixture",
-            method=MILP, seed=0, max_outer_iterations=10, runtime_seconds=1.5,
+            method=MILP, sample_seed=0, tree_init_seed=None,
+            max_outer_iterations=10, runtime_seconds=1.5,
             setup_name="s", faulty_nodes=[], faulty_edges=[],
             island_lambda_min=[1.0], component_lambda_min=[1.0],
             cost_terms=incomplete,
@@ -371,7 +394,8 @@ _FAILURE_INFO = {
 
 def _save_failure(tmp_path, outer_state):
     path = save_failure_result(
-        "fixture", method=MILP, seed=0, max_outer_iterations=10,
+        "fixture", method=MILP, sample_seed=0, tree_init_seed=None,
+        max_outer_iterations=10,
         runtime_seconds=0.06, setup_name="fixture_setup",
         faulty_nodes=[1], faulty_edges=[(1, 2)],
         problem=_problem(), info=_FAILURE_INFO,
@@ -487,7 +511,8 @@ def test_run_script_persists_the_enriched_outer_state(monkeypatch, tmp_path):
     # And the run parameters that make the record reproducible.
     assert captured["example_name"] == "linear_10node_milp"
     assert captured["method"] == script.INNER_METHOD
-    assert captured["seed"] == script.SEED
+    assert captured["sample_seed"] == script.SAMPLE_SEED
+    assert captured["tree_init_seed"] == script.TREE_INIT_SEED
     assert captured["max_outer_iterations"] == script.MAX_OUTER_ITERATIONS
 
 
@@ -533,3 +558,72 @@ def test_run_script_failure_path_writes_a_readable_record(monkeypatch, tmp_path)
     assert payload["config"]["P_1"] == 20
     assert "pass 1" in payload["method"]["best_bound"]["scope"]
     assert [e["pass"] for e in payload["pass_history"]] == [0]
+
+
+@pytest.mark.parametrize(
+    "method,tree_init_seed,message",
+    [
+        (MILP, 0, "initialises no spanning tree"),
+        (MILP, 7, "initialises no spanning tree"),
+        (LOCAL_SEARCH, None, "initialised from exactly one tree"),
+    ],
+    ids=["milp_with_zero", "milp_with_seed", "local_search_with_none"],
+)
+def test_contradictory_method_and_tree_seed_are_refused(
+    method, tree_init_seed, message, tmp_path
+):
+    # The schema says a MILP result carries tree_init_seed=None and a
+    # local-search result carries its actual start. Accepting the
+    # contradictions would put a fabricated fact into an artifact that
+    # outlives the run -- a MILP result naming a start that never happened,
+    # or a local-search result hiding the single-start degree of freedom.
+    info = _MILP_OPTIMAL if method == MILP else {"reason": "local_optimum",
+                                                 "iterations": 3}
+
+    with pytest.raises(ValueError, match=message):
+        _save(tmp_path, _result(info), method, tree_init_seed=tree_init_seed)
+
+
+def test_the_failure_writer_applies_the_same_guard(tmp_path):
+    # save_failure_result has its own signature and its own payload, so the
+    # guard has to be wired into both writers, not just the success path.
+    with pytest.raises(ValueError, match="initialises no spanning tree"):
+        save_failure_result(
+            "fixture", method=MILP, sample_seed=0, tree_init_seed=0,
+            max_outer_iterations=10,
+            runtime_seconds=0.06, setup_name="fixture_setup",
+            faulty_nodes=[1], faulty_edges=[(1, 2)],
+            problem=_problem(), info=_FAILURE_INFO,
+            error=RuntimeError("no feasible solution"),
+            results_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "method", ["some future solver", "MILP ", "milp", "Local Search"],
+    ids=["new_solver", "trailing_space", "wrong_case", "wrong_case_local"],
+)
+def test_an_unknown_method_is_refused(method, tmp_path):
+    # Exemption was worse than rejection: an unknown string does not merely
+    # skip validation, it gets MISHANDLED. _method_block dispatches on
+    # `method == MILP` and treats everything else as local search, so
+    # "MILP " (trailing space) would bypass the seed guard and then be
+    # written out with a local-search block -- final_reason and
+    # final_iterations read off a MILP info dict that has neither, and no
+    # status, bound or gap recorded at all.
+    with pytest.raises(ValueError, match="unknown method"):
+        _save(tmp_path, _result({"reason": "local_optimum", "iterations": 1}),
+              method, tree_init_seed=None)
+
+
+def test_the_failure_writer_also_refuses_an_unknown_method(tmp_path):
+    with pytest.raises(ValueError, match="unknown method"):
+        save_failure_result(
+            "fixture", method="MILP ", sample_seed=0, tree_init_seed=None,
+            max_outer_iterations=10,
+            runtime_seconds=0.06, setup_name="fixture_setup",
+            faulty_nodes=[1], faulty_edges=[(1, 2)],
+            problem=_problem(), info=_FAILURE_INFO,
+            error=RuntimeError("no feasible solution"),
+            results_dir=tmp_path,
+        )

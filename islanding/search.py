@@ -9,7 +9,15 @@ import networkx as nx
 from islanding.augmented import SOURCE, SINK
 
 
-def initial_spanning_tree(gbar, seed=0):
+# The tree-initialisation seed, distinct from whatever seed a caller used to
+# draw the sample sets. Named so a run script can RECORD which start it got
+# without duplicating the literal: local_search calls
+# initial_spanning_tree(...) with no seed argument, so every local-search
+# result is a single-start result at this value unless a caller overrides it.
+DEFAULT_TREE_SEED = 0
+
+
+def initial_spanning_tree(gbar, seed=DEFAULT_TREE_SEED):
     """Seeded-random spanning tree of gbar that always contains (SOURCE, SINK).
 
     Assigns (SOURCE, SINK) a weight lower than every other edge and every

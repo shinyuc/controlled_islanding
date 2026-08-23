@@ -9,7 +9,8 @@ Importing this module defines the builder only; it runs no computation.
 PLACEHOLDER VALUES -- alpha has NOT been tuned for this case. These are
 copied from the 10-node case (examples/linear_10node/config.py), where a
 sweep put the useful band at roughly 3-5. That band is unlikely to carry
-over: alpha weighs the stability penalties against F1..F4, and this case's
+over: alpha weighs the stability penalties against F1 + F3 - F4 (there
+is no F2 -- it was dropped from the formulation), and this case's
 cost magnitudes are larger -- 30 nodes at c_i = 2 and 82 edges at
 c_ij = 1, versus 10 nodes and 17 edges. The same alpha therefore buys
 proportionally less influence over the search here, so expect to need a
