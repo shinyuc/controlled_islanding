@@ -1,6 +1,9 @@
-"""Tests for islanding/cost.py, reproducing the worked example in
-docs/cost_function_spec.md section 6 (11-node, 5-island reconnection case)
-and the F5 fixture in section 13.
+"""Tests for islanding/cost.py.
+
+The production objective tests reproduce docs/cost_function_spec.md section
+6's 11-node reconnection example. Separate legacy-compatibility tests exercise
+the retained f2 helper and F(...) slot; F2 is not part of the live objective.
+The F5 tests use the fixture from section 13.
 """
 
 from dataclasses import replace
@@ -62,24 +65,32 @@ def test_algorithm_config_requires_k1_at_least_k2():
     assert config.k_1 == config.k_2
 
 
-def test_worked_example_terms_and_combined_cost():
+def test_production_worked_example_terms_and_combined_cost():
     topology, stable_islands, unstable_islands, reconnected_edges, cost_data, config = _worked_example()
 
     f1 = f1_unstable_nodes(unstable_islands, cost_data)
-    f2 = f2_unstable_edges(unstable_islands, topology, cost_data)
     f3 = f3_operation_edges(stable_islands, unstable_islands, topology, cost_data, config)
     f4 = f4_reconnection(reconnected_edges, cost_data, config)
 
     assert f1 == 13
-    assert f2 == 7
     assert f3 == 23
     assert f4 == pytest.approx(2.8)
-
-    assert F(13, 7, 23, 2.8) == pytest.approx(40.2)
-    assert F(f1, f2, f3, f4) == pytest.approx(40.2)
+    assert F(f1, 0.0, f3, f4) == pytest.approx(33.2)
 
 
-def test_F_adds_nonzero_f5():
+def test_legacy_f2_helper_and_combiner_slot_remain_compatible():
+    # F2 was dropped from the production formulation, but the old helper and
+    # combiner slot remain for API compatibility. This deliberately tests that
+    # legacy arithmetic without presenting 40.2 as the production ground truth.
+    topology, _, unstable_islands, _, cost_data, _ = _worked_example()
+    legacy_f2 = f2_unstable_edges(unstable_islands, topology, cost_data)
+
+    assert legacy_f2 == 7
+    assert F(13, legacy_f2, 23, 2.8) == pytest.approx(40.2)
+
+
+def test_legacy_combiner_f2_slot_with_nonzero_f5():
+    # Compatibility behavior only: production callers always pass f2=0.0.
     assert F(13, 7, 23, 2.8, 5.0) == pytest.approx(45.2)
 
 
@@ -467,7 +478,12 @@ def test_cost_data_accepts_zero_costs():
 def test_algorithm_config_requires_positive_kappa_op():
     # kappa_op > kappa_rec alone permits a negative kappa_op, which makes
     # F3 negative and breaks F_hat >= 0.
-    with pytest.raises(ValueError):
+    #
+    # Matched on the MESSAGE, not just the type: this config violates
+    # kappa_rec > 0 as well, so a bare pytest.raises(ValueError) would pass
+    # even if the kappa_op check were deleted. The two checks are ordered
+    # so the kappa_op one reports first.
+    with pytest.raises(ValueError, match="kappa_op must be positive"):
         AlgorithmConfig(kappa_op=-1.0, kappa_rec=-2.0)
 
 
@@ -489,6 +505,41 @@ def test_negative_edge_cost_would_make_a_negative_objective_reachable():
 # ---------------------------------------------------------------------------
 # Nonfinite values, and validation that survives `python -O`
 # ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "kappa_rec", [0.0, -0.7, -5.0], ids=["zero", "negative", "very_negative"]
+)
+def test_algorithm_config_requires_positive_kappa_rec(kappa_rec):
+    # docs/cost_function_spec.md section 2 states kappa_rec > 0, but the
+    # code accepted kappa_rec = -5.0 until now. A nonpositive reconnection
+    # weight makes F4 a second charge rather than a refund: restoring an
+    # edge would cost at least as much as leaving it cut, inverting the
+    # two-stage reading of F3/F4 (spec section 7).
+    #
+    # Zero is rejected too: at kappa_rec = 0 the reward term is inert, which
+    # lies outside the spec's strictly-positive model. This does not imply a
+    # search trajectory can never contain reconnection: a move may introduce
+    # it incidentally while improving other terms, and an existing reconnection
+    # may persist when removing it would only tie rather than strictly improve.
+    with pytest.raises(ValueError, match="kappa_rec must be positive"):
+        AlgorithmConfig(kappa_op=1.0, kappa_rec=kappa_rec)
+
+
+def test_a_valid_kappa_rec_is_still_accepted():
+    # The boundary the narrowing must not cross: every example config and
+    # test fixture in the repo uses 0.7.
+    config = AlgorithmConfig(kappa_op=1.0, kappa_rec=0.7)
+
+    assert config.kappa_rec == 0.7
+
+
+def test_kappa_rec_must_also_be_finite():
+    # Covered by the shared finiteness sweep rather than a separate check;
+    # asserted here so a future edit to that list cannot drop it silently.
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="kappa_rec must be finite"):
+            AlgorithmConfig(kappa_op=1.0, kappa_rec=bad)
+
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_cost_data_rejects_nonfinite_node_costs(bad):
@@ -538,6 +589,9 @@ cases = [
         lambda: AlgorithmConfig(kappa_op=-1.0, kappa_rec=-2.0)),
     ("kappa_op <= kappa_rec",
         lambda: AlgorithmConfig(kappa_op=0.5, kappa_rec=0.7)),
+    ("zero kappa_rec", lambda: AlgorithmConfig(kappa_op=1.0, kappa_rec=0.0)),
+    ("negative kappa_rec",
+        lambda: AlgorithmConfig(kappa_op=1.0, kappa_rec=-5.0)),
     ("inf kappa_op",
         lambda: AlgorithmConfig(kappa_op=float('inf'), kappa_rec=0.7)),
     ("nan mip_gap", lambda: MILPConfig(time_limit=1.0, mip_gap=float('nan'))),

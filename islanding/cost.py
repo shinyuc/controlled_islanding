@@ -149,6 +149,26 @@ class AlgorithmConfig:
                 "F_hat >= 0, on which the zero-objective optimality proof "
                 "depends."
             )
+        # kappa_rec > 0 is the two-stage reading (spec section 7): F3
+        # charges kappa_op for cutting an edge and F4 refunds kappa_rec for
+        # restoring it, so a reconnected edge nets
+        # (kappa_op - kappa_rec) * c_ij. kappa_op > kappa_rec keeps that
+        # net positive -- reconnection is never free -- and kappa_rec > 0
+        # keeps it a REFUND: at kappa_rec <= 0 restoring an edge would cost
+        # at least as much as leaving it cut, which inverts the term's
+        # meaning rather than merely retuning it.
+        #
+        # Checked after kappa_op > 0 on purpose. Once this holds,
+        # kappa_op > kappa_rec > 0 implies kappa_op > 0, so the check above
+        # can no longer fire on its own; keeping it ordered first preserves
+        # its specific message for a config that violates only it.
+        if not self.kappa_rec > 0:
+            raise ValueError(
+                f"kappa_rec must be positive; got {self.kappa_rec!r}. A "
+                "nonpositive reconnection weight makes restoring an edge "
+                "cost at least as much as leaving it cut, contradicting "
+                "the two-stage reading of F3/F4."
+            )
         # Cross-constraint from the revised F6 theory (spec section 15):
         # k_1 >= k_2 > 0. Note >=, not strict -- k_1 == k_2 is allowed, and
         # makes F6's Part 4 vanish.

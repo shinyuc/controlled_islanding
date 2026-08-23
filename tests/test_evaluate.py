@@ -2,7 +2,8 @@
 
 Reuses the 11-node, 5-island spanning tree from the decode_reconnection
 multi-island merge test (tests/test_search.py) and the cost data/kappas
-from the cost spec's worked example (F1=13, F2=7, F3=23, F4=2.8).
+from the cost spec's production worked example (F1=13, F3=23, F4=2.8,
+so the live economic total is 13 + 23 - 2.8 = 33.2).
 """
 
 import networkx as nx
@@ -90,9 +91,9 @@ def test_evaluate_matches_worked_example_with_zero_samples():
 
     result = evaluate(tree, problem)
 
-    # evaluate() computes no F2 -- the term was dropped from the
-    # formulation (islanding/evaluate.py) -- so the worked example's F2=7
-    # does not contribute: 40.2 - 7 = 33.2.
+    # Directly from the live production terms: F1 + F3 - F4, while the
+    # zero samples make F5 = F6 = 0. No obsolete F2 total is involved.
+    # 13 + 23 - 2.8 = 33.2.
     assert result == pytest.approx(33.2)
 
 
@@ -128,9 +129,8 @@ def test_evaluate_penalty_terms_raise_total_above_worked_example():
 
     result = evaluate(tree, problem)
 
-    # evaluate() computes no F2 -- the term was dropped from the
-    # formulation (islanding/evaluate.py) -- so the comparison baseline
-    # drops by the worked example's F2=7: 40.2 - 7 = 33.2.
+    # The live economic baseline is directly F1 + F3 - F4:
+    # 13 + 23 - 2.8 = 33.2. The deliberately unstable sample adds F5.
     assert result > 33.2
 
 
@@ -184,8 +184,8 @@ def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
 
     result = evaluate(tree, problem)
 
-    # Compute the F1..F4 baseline independently, via the same decode calls
-    # evaluate() itself makes, to avoid a hand-derived "magic number".
+    # Compute the live economic baseline independently, via the same decode
+    # calls evaluate() itself makes, to avoid a hand-derived "magic number".
     stable, unstable = decode_islanding(tree, topology)
     _, _, reconnected = decode_reconnection(tree, topology)
     f1 = f1_unstable_nodes(unstable, cost_data)
@@ -194,7 +194,7 @@ def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
     f4 = f4_reconnection(reconnected, cost_data, config)
 
     # Assert F5 and F6 are exactly 0 directly -- comparing only the total
-    # against F(f1, f2, f3, f4) would still pass if f5/f6 were broken and
+    # against F(f1, 0.0, f3, f4) would still pass if f5/f6 were broken and
     # always returned 0, so check the terms themselves too.
     f5 = f5_stability_penalty(stable, topology, model, samples_1, config)
     f6 = f6_reconnection_stability(
@@ -208,8 +208,8 @@ def test_evaluate_healthy_partition_with_real_samples_gives_only_f1_to_f4():
     assert reconnected == set()
 
     # evaluate() contributes no F2: the term was dropped from the
-    # formulation, so it passes 0.0 into F's f2 slot. f2_unstable_edges
-    # still exists and is called directly above, where it computes a
+    # formulation, so it passes 0.0 into F's legacy f2 slot. The retained
+    # f2_unstable_edges compatibility helper is called directly above and computes a
     # NONZERO value on this fixture -- pinned here, because it is what
     # makes the next assertion meaningful: if f2 were 0 anyway, passing
     # 0.0 would prove nothing about evaluate() omitting the term.

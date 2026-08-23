@@ -130,7 +130,7 @@ def test_local_search_max_iterations_zero_stops_immediately():
 
 
 def test_local_search_from_a2_reaches_zero_in_one_swap():
-    # A2 has stable island {1} and unstable island {2} (F_hat=4.2). One
+    # A2 has stable island {1} and unstable island {2} (F_hat=3.1). One
     # swap -- remove (SINK,2), add (n2,2) -- yields A1 (F_hat=0). Assert
     # on the objective and reason, not on a specific tree.
     problem = _fixture()

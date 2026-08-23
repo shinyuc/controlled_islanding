@@ -399,7 +399,7 @@ def save_failure_result(
     separately and the bound is scoped to that pass.
 
     Deliberately NOT a mode of save_result. Every field save_result
-    promises (the partition, the six terms, the lambda_min lists) is
+    promises (the partition, the five live cost terms, the lambda_min lists) is
     absent here, and a schema where half the keys may be null is worse
     than two schemas that each mean one thing. `outcome` tells them
     apart -- "solved" there, "no_incumbent" here.
