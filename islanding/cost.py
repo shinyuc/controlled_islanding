@@ -690,19 +690,52 @@ def _psi_reconnection(nodes, edges_r, neighbors, rec_neighbors, states, model, c
 
         part_1 += float(np.dot(g[i], rec_flow))
 
-        # Full dynamics at i: node term plus couplings over
-        # (N_i cap V_r) union N_i^rec. The two neighbour sets are disjoint
-        # (a reconnected edge joins distinct islands), so adding rec_flow
-        # to the within-island sum needs no dedup.
-        dyn_i = model.f_i(i, x_i)
-        for k in neighbors[i]:
-            dyn_i = dyn_i + model.f_ij(i, k, x_i, states[k])
-        dyn_i = dyn_i + rec_flow
+        # SHORT-CIRCUIT. dyn_i feeds Part 2 and nothing else, and Part 2's
+        # inner sum runs over N_i^rec (spec section 14) -- so for a node
+        # with no reconnected neighbours it is computed and then thrown
+        # away. E^rec is typically 0-3 edges on these benchmarks and often
+        # empty, so that was most of F6's f_ij calls.
+        #
+        # Skipping DISCARDED work only, so results are bit-identical
+        # rather than merely close: no floating-point sum loses or gains a
+        # term. Note what is deliberately NOT skipped --
+        #
+        #   part_1 += float(np.dot(g[i], rec_flow)) above stays outside
+        #   the guard. With rec_i empty it adds exactly 0.0, so hoisting
+        #   it in would look free; but `x + 0.0` is not `x` when x is
+        #   -0.0, and np.dot(g_i, zeros) is NaN rather than 0.0 if g_i
+        #   ever held a NaN. Leaving it unconditional keeps bit-identity
+        #   by construction instead of by argument.
+        #
+        #   Part 4 is untouched: it is -(k_1 - k_2) * W_r, involves no
+        #   N_i^rec, and is computed from W_r outside this loop.
+        #
+        # ASSUMPTION: the model callables are PURE. Bit-identity here means
+        # "the surviving arithmetic is unchanged", which is only the whole
+        # story if a call that no longer happens had no other effect. A
+        # stateful f_i or f_ij -- one counting invocations, memoising
+        # against a mutable store, or logging -- would observe the reduced
+        # call count, and a call that previously raised would no longer do
+        # so. Purity is the natural reading of the SystemModel contract and
+        # every model in this repository satisfies it, but nothing enforces
+        # it, so a future model with side effects would need this revisited.
+        # tests/test_psi_short_circuit.py relies on exactly that
+        # observability -- deliberately, with a recording model -- to prove
+        # the guard is present.
+        if rec_i:
+            # Full dynamics at i: node term plus couplings over
+            # (N_i cap V_r) union N_i^rec. The two neighbour sets are
+            # disjoint (a reconnected edge joins distinct islands), so
+            # adding rec_flow to the within-island sum needs no dedup.
+            dyn_i = model.f_i(i, x_i)
+            for k in neighbors[i]:
+                dyn_i = dyn_i + model.f_ij(i, k, x_i, states[k])
+            dyn_i = dyn_i + rec_flow
 
-        for j in rec_i:
-            grad_ij_i, _ = model.grad_W_ij(i, j, x_i, states[j])
-            part_2 += float(np.dot(grad_ij_i, dyn_i))
-            part_3 += model.W_ij(i, j, x_i, states[j])
+            for j in rec_i:
+                grad_ij_i, _ = model.grad_W_ij(i, j, x_i, states[j])
+                part_2 += float(np.dot(grad_ij_i, dyn_i))
+                part_3 += model.W_ij(i, j, x_i, states[j])
 
     part_3 *= config.k_2 / 2.0
     part_4 = -(config.k_1 - config.k_2) * W_r
