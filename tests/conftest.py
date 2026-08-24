@@ -89,7 +89,18 @@ def synthetic_edge_energy_model():
             delta = x_i - x_j
             return (delta, -delta)
 
-        return replace(base_model, W_ij=W_ij, grad_W_ij=grad_W_ij)
+        # island_quadratic_form MUST be cleared. It is inherited by
+        # dataclasses.replace from the linear-consensus base, but its
+        # closed form assumes W_ij == 0 -- which is exactly what this
+        # model breaks. Leaving it set makes F5's fast path compute a
+        # different (wrong) value while every signature still matches:
+        # on the 10-node fixture it gave 82.58 where the true value is
+        # 30.16, and only tests/test_baseline.py's MILP-vs-cost equality
+        # noticed.
+        return replace(
+            base_model, W_ij=W_ij, grad_W_ij=grad_W_ij,
+            island_quadratic_form=None,
+        )
 
     return build
 

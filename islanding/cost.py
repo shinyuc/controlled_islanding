@@ -205,11 +205,52 @@ def canon(edge):
 
 
 def _induced_edges(nodes, topology):
-    return {
-        canon((u, v))
-        for u, v in topology.edges()
-        if u in nodes and v in nodes
-    }
+    """Within-island edges of `nodes`, cached per (topology, node set).
+
+    For a fixed topology the result depends only on the node set, but this
+    was recomputed over the FULL edge list on every call: 7.7M calls and
+    75.4 s of the 20-node profile's 596 s.
+
+    The cache lives on the Topology instance, so its lifetime is exactly
+    the topology's and it cannot leak between problems. A module-level
+    dict keyed by id(topology) would be wrong -- CPython reuses ids after
+    garbage collection, so a freed topology's id could be handed to a new
+    one and silently serve it another graph's edges. Keying by the
+    topology object itself would need Topology to be hashable and would
+    keep every topology alive for the process's lifetime.
+
+    Returns a TUPLE, so the cached value cannot be corrupted. A shared
+    mutable set would leave one stray `.pop()` or `.clear()` silently
+    wrong for every later evaluation of that island -- and "no caller
+    mutates it" was only a convention, not a guarantee.
+
+    The tuple is built from the set's OWN iteration order and then frozen.
+    That is what keeps results bit-identical rather than merely equal:
+    iteration order feeds floating-point summation order in
+    _stability_bracket (grad accumulation and the W_ij sum) and in
+    _psi_reconnection, and float addition is not associative. The edges are
+    deliberately NOT sorted -- sorting would also be deterministic, but a
+    DIFFERENT order, and would change historical results.
+
+    A tuple is free here because no consumer does a membership test on the
+    return value; every use is iteration (`for u, v in edges_r`) or, in
+    f3_operation_edges, a set `.update()`. Were there an `edge in edges`
+    test, this would have to stay a set: O(1) lookups becoming O(n) could
+    cost more than the caching saves.
+    """
+    key = frozenset(nodes)
+    cache = topology._induced_edge_cache
+    edges = cache.get(key)
+    if edges is None:
+        # The original comprehension, unchanged, so the order captured
+        # below is exactly the order this function always produced.
+        edges = tuple({
+            canon((u, v))
+            for u, v in topology.edges()
+            if u in nodes and v in nodes
+        })
+        cache[key] = edges
+    return edges
 
 
 def f1_unstable_nodes(unstable_islands, cost_data):
@@ -230,7 +271,11 @@ def f3_operation_edges(stable_islands, unstable_islands, topology, cost_data, co
 
     within_island_edges = set()
     for island in list(stable_islands) + list(unstable_islands):
-        within_island_edges |= _induced_edges(island, topology)
+        # .update(), not |=: _induced_edges returns a tuple now. Same
+        # insertion order, so within_island_edges is built identically --
+        # and cut_edges' own iteration order comes from all_edges anyway,
+        # since set difference iterates the left operand.
+        within_island_edges.update(_induced_edges(island, topology))
 
     cut_edges = all_edges - within_island_edges
     return config.kappa_op * sum(cost_data.edge_costs[edge] for edge in cut_edges)
@@ -292,6 +337,31 @@ class SystemModel:
     sampler: Callable
     inflation: Callable
     counterexample: Callable
+    # OPTIONAL fast path, following the same pattern as sampler/inflation/
+    # counterexample: a model that can express its F5 bracket as a
+    # quadratic form supplies one, and f5_stability_penalty evaluates every
+    # sample in a single einsum instead of a per-node, per-edge Python
+    # loop. None means "no closed form" and the loop runs unchanged.
+    #
+    # Only valid where the bracket really IS quadratic in the island state.
+    # Linear consensus qualifies because W_ij == 0 and the dynamics are
+    # linear; Kuramoto and any model with nonzero edge energy do not, and
+    # must leave this None.
+    #
+    # WARNING -- dataclasses.replace INHERITS this field. Deriving a model
+    # by swapping W_ij, grad_W_ij, f_i or f_ij while leaving this set
+    # gives a fast path whose closed form no longer describes the model,
+    # and F5 then returns a different number with no error and no type
+    # mismatch. Anything that changes the energy or the dynamics must pass
+    # island_quadratic_form=None. The synthetic edge-energy model in
+    # tests/conftest.py is the worked example.
+    #
+    #   island_quadratic_form(nodes, edges, k) -> (members, B)
+    #
+    # `members` is the island's nodes in the row/column order of `B`, and
+    # the bracket for a state X (rows ordered by `members`) is
+    # trace(X.T @ B @ X).
+    island_quadratic_form: Callable = None
 
 
 def linear_consensus_model(node_weights, edge_weights):
@@ -301,6 +371,24 @@ def linear_consensus_model(node_weights, edge_weights):
     Lyapunov function W_i(x_i) = 0.5 * x_i . x_i is weight-independent;
     W_ij and grad_W_ij are identically zero for this model.
     """
+
+    # DEFENSIVE COPIES. Everything below closes over these dictionaries,
+    # and island_quadratic_form CACHES matrices built from them. Captured
+    # by reference, a later mutation of the caller's dict would be seen
+    # immediately by f_i and f_ij while the cache kept returning the
+    # matrix built from the old weights -- the two paths then disagree
+    # with no error. Reproduced: changing one node weight after a matrix
+    # was cached gave 0.0 from the fast path against 16.25 from the loop.
+    #
+    # Copying rather than versioning the cache key: a version would have
+    # to be bumped by whoever mutates, which is exactly the discipline
+    # that failed. Copying makes the model's weights immutable from the
+    # outside, which is how every caller already treats them -- nothing in
+    # islanding/, baseline/ or examples/ mutates a weight dict after
+    # construction, so this changes no current behaviour. The copies are
+    # shallow, which is enough: the values are floats.
+    node_weights = dict(node_weights)
+    edge_weights = dict(edge_weights)
 
     def f_i(i, x_i):
         return -node_weights[i] * x_i
@@ -318,8 +406,120 @@ def linear_consensus_model(node_weights, edge_weights):
     def grad_W_i(i, x_i):
         return x_i
 
+    # W_ij is identically zero for this model, so grad_W_ij returns a pair
+    # of zero vectors. Allocating them fresh on every call dominated the
+    # 20-node profile: 51.9M calls to grad_W_ij, 120.5M np.zeros_like
+    # calls, 93.3 s of pure allocation out of 596 s total.
+    #
+    # The arrays are shared and READ-ONLY. Sharing is safe because no
+    # consumer mutates the return value -- audited at every call site:
+    #   cost.py _stability_bracket:  grad_W[u] = grad_W[u] + grad_u
+    #   cost.py _psi_reconnection:   g[u] = g[u] + grad_u
+    #     both REBIND to a new array; neither uses +=.
+    #   cost.py _psi_reconnection:   np.dot(grad_ij_i, dyn_i)   -- read
+    #   baseline/milp.py _sample_cache: stored, then only np.dot'd -- read
+    # writeable=False turns any future in-place write into a loud
+    # ValueError rather than silent cross-call corruption.
+    #
+    # Keyed by (shape, dtype) rather than one array per model: a single
+    # model may legitimately be evaluated at more than one state dimension
+    # d (the d=1 and d=2 F6 tests do exactly that), and the pair's two
+    # halves are built from x_i and x_j independently.
+    _zero_grads = {}
+
+    def _shared_zero(like):
+        key = (like.shape, like.dtype)
+        zero = _zero_grads.get(key)
+        if zero is None:
+            # THE CONTRACT, stated narrowly. This is a correct substitute
+            # for np.zeros_like on ORDINARY ndarrays whose (shape, dtype)
+            # determine the result -- which is what every caller passes: a
+            # 1-D float64 slice of a samples array.
+            #
+            # It is NOT a general equivalent, because the key omits two
+            # things zeros_like honours:
+            #   - memory order. A C-contiguous (2,2) followed by an
+            #     F-contiguous (2,2) gets the cached C-contiguous zero,
+            #     where zeros_like would return F-contiguous.
+            #   - subclass. An ndarray followed by an np.matrix of the
+            #     same shape and dtype gets an ndarray, where
+            #     zeros_like(matrix) returns a matrix.
+            # Neither reaches the current callers, and neither would change
+            # a value -- only layout and type. Widen the key before using
+            # this model with F-ordered or subclassed states.
+            zero = np.zeros_like(like)
+            zero.flags.writeable = False
+            _zero_grads[key] = zero
+        return zero
+
     def grad_W_ij(i, j, x_i, x_j):
-        return (np.zeros_like(x_i), np.zeros_like(x_j))
+        return (_shared_zero(x_i), _shared_zero(x_j))
+
+    # Cache of island quadratic forms, on the MODEL rather than the
+    # Topology: B is built from the weights, which the topology does not
+    # know. Keyed by the induced edge set as well as the node set -- one
+    # model can legitimately be evaluated against more than one topology
+    # (tests do exactly that), and two topologies can share an island's
+    # nodes while inducing different edges.
+    _quadratic_forms = {}
+
+    def island_quadratic_form(nodes, edges, k):
+        """B with trace(X.T B X) equal to F5's bracket for this island.
+
+        For linear consensus the bracket has a closed form. With
+        W_i = 0.5 * x_i.x_i, W_ij = 0, f_i = -w_i x_i and
+        f_ij = -w_ij (x_i - x_j):
+
+            dW_r/dx_i = x_i
+            f_i + sum_{j in N_i cap V_r} f_ij = -(M_r x_r)_i
+            W_r = 0.5 * ||x_r||^2
+
+        with M_r = D_r + L_r, so
+
+            bracket = x_r.(-M_r x_r) + (k/2) ||x_r||^2
+                    = x_r^T (-M_r + (k/2) I) x_r.
+
+        That is an identity, not an approximation: M_r is the same matrix
+        build_M and linear_counterexample construct. For d > 1 the
+        coordinates decouple (the weights are scalars), so the bracket is
+        trace(X.T B X) over the (n_r, d) state.
+        """
+        key = (frozenset(nodes), frozenset(edges), k)
+        cached = _quadratic_forms.get(key)
+        if cached is None:
+            members = sorted(nodes)
+            index = {node: i for i, node in enumerate(members)}
+            B = np.zeros((len(members), len(members)))
+            # -M_r = -(D_r + L_r), built directly.
+            for node in members:
+                B[index[node], index[node]] -= node_weights[node]
+            for u, v in edges:
+                w = edge_weights[canon((u, v))]
+                a, b = index[u], index[v]
+                B[a, b] += w
+                B[b, a] += w
+                B[a, a] -= w
+                B[b, b] -= w
+            B[np.diag_indices(len(members))] += k / 2.0
+            # Guarded against ACCIDENTAL mutation before caching, for the
+            # same reason the induced-edge tuples and the shared zero
+            # gradients are: this pair is handed to every later caller for
+            # this key, so a reordered `members` or a written-to `B` would
+            # silently corrupt every subsequent F5 evaluation. Free -- all
+            # consumers only read.
+            #
+            # This is a guard, NOT immutability, and the difference is
+            # verified rather than assumed. B owns its buffer, so
+            # `B.setflags(write=True)` re-enables writing and a subsequent
+            # store does corrupt the cache; the cache dict itself is
+            # reachable through `island_quadratic_form.__closure__` and can
+            # be cleared from outside. Both take deliberate effort, which
+            # is the point -- the same protection level the shared zero
+            # gradients have, and appropriate for internal research code.
+            B.flags.writeable = False
+            cached = (tuple(members), B)
+            _quadratic_forms[key] = cached
+        return cached
 
     def sampler(threshold, P1, n, d):
         dim = n * d
@@ -336,6 +536,7 @@ def linear_consensus_model(node_weights, edge_weights):
     return SystemModel(
         f_i=f_i, f_ij=f_ij, W_i=W_i, W_ij=W_ij,
         grad_W_i=grad_W_i, grad_W_ij=grad_W_ij, sampler=sampler,
+        island_quadratic_form=island_quadratic_form,
         inflation=inflation,
         counterexample=linear_counterexample(node_weights, edge_weights),
     )
@@ -386,6 +587,41 @@ def f5_stability_penalty(stable_islands, topology, model, samples, config):
 
     nodes = sorted(topology.nodes())
     node_index = {node: idx for idx, node in enumerate(nodes)}
+
+    # FAST PATH, when the model can express the bracket as a quadratic
+    # form (linear consensus can; see SystemModel.island_quadratic_form).
+    # Evaluates every sample for an island in one einsum instead of a
+    # Python loop over nodes and edges per sample.
+    #
+    # NOT bit-identical to the loop below, and cannot be: the matrix
+    # product accumulates in a different order and BLAS may block or
+    # thread.
+    #
+    # ACCEPTANCE CRITERION, and its scope. The two paths were required to
+    # agree to 1e-12 ABSOLUTE (see tests/test_cost_caches.py, which
+    # enforces it with rel=0.0). Measured disagreement on the benchmark
+    # cases is at most 1.78e-15 on F5 values of order 30, so the bar has
+    # roughly three orders of margin -- and it sits thirteen orders below
+    # the epsilon = 0.01 threshold the local search accepts swaps at, so
+    # it cannot change which swap is taken.
+    #
+    # That absolute bar is calibrated to THESE magnitudes. Relative error
+    # is what the arithmetic actually bounds (~1e-16 per operation), so on
+    # an instance whose F5 ran to 1e6 an absolute 1e-12 would be tighter
+    # than float64 can deliver and would have to be revisited. Nothing in
+    # the 10- to 50-node cases is near that.
+    quadratic_form = model.island_quadratic_form
+    if quadratic_form is not None:
+        total = 0.0
+        for island in stable_islands:
+            members, B = quadratic_form(
+                island, _induced_edges(island, topology), config.k_1
+            )
+            rows = [node_index[node] for node in members]
+            X = samples[:, rows, :]                     # (P, n_r, d)
+            brackets = np.einsum("pic,ij,pjc->p", X, B, X)
+            total += float(np.maximum(brackets, 0.0).sum())
+        return config.alpha_1 / config.P_1 * total
 
     total = 0.0
     for sample in samples:
