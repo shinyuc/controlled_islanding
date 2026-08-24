@@ -118,6 +118,26 @@ class AlgorithmConfig:
     # for the small cases here, not a universal constant. Appended at the
     # end of the field list so no positional construction shifts.
     stability_tolerance: float = 1e-9
+    # TEMPORARY(DISABLE_RECONNECTION) -- test flag, revert before committing.
+    #
+    # When True, evaluate() passes an EMPTY E^rec to F4 and F6, and
+    # find_counterexamples_for_partition skips the component-side check.
+    # It exists to measure how much of the local search's cost gap comes
+    # from the islanding decision alone, with the reconnection reward off.
+    #
+    # It lives on the config rather than as a module constant read from
+    # examples/ because islanding/ must not import examples/ -- that would
+    # invert the layering and would silently apply the flag to every case
+    # and to the whole test suite. As a config field it reaches evaluate()
+    # and the counterexample search through the Problem they already
+    # receive, and only the case whose build_config() sets it is affected.
+    #
+    # BOTH inner solvers honour this flag: the local search through
+    # evaluate(), and the MILP by omitting y, the eligibility rows and the
+    # q^r/q^sr/q^rr families from the model. So flagged runs of the two ARE
+    # comparable with each other -- but never with an unflagged run of
+    # either, which includes the reconnection reward.
+    disable_reconnection: bool = False
 
     def __post_init__(self):
         # Finiteness first: every comparison below returns False on a NaN,

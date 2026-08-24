@@ -47,6 +47,29 @@ def draw_samples(topology, model, config, n, d):
     return samples_1, samples_2
 
 
+
+# TEMPORARY(DISABLE_RECONNECTION) -- test flag, revert before committing.
+def effective_reconnection(config, reconnected):
+    """The E^rec the objective actually uses: empty when the flag is set.
+
+    THE SINGLE DEFINITION OF THE RULE. It exists because the run scripts
+    got this wrong: evaluate() applied the flag while the scripts re-decoded
+    the REAL reconnected set for their report, so the search minimised one
+    function and the report described another. On the 30-node initial tree
+    that was an objective of 129.433 against a reported total of 126.105,
+    with F4 = 3.5 and F6 = 0.171 for reconnections the objective had
+    ignored. Every consumer -- evaluate(), the run scripts, utils.save --
+    now goes through here, so they cannot disagree.
+
+    With an empty E^rec, F4 is 0 by construction and Psi_r loses Parts 1-3
+    (N_i^rec is empty for every node), leaving Part 4 = -(k_1 - k_2) W_r
+    <= 0, which the per-island hinge clips to zero. F6 is therefore zero as
+    its GENUINE value under no reconnection -- not muted, and a sign error
+    in Part 4 would still surface.
+    """
+    return set() if config.disable_reconnection else reconnected
+
+
 def evaluate(A, problem):
     """Decode spanning tree A once and return the combined cost F(A)."""
     stable, unstable = decode_islanding(A, problem.topology)
@@ -62,6 +85,9 @@ def evaluate(A, problem):
     f3 = f3_operation_edges(
         stable, unstable, problem.topology, problem.cost_data, problem.config
     )
+    # TEMPORARY(DISABLE_RECONNECTION) -- test flag, revert before committing.
+    reconnected = effective_reconnection(problem.config, reconnected)
+
     f4 = f4_reconnection(reconnected, problem.cost_data, problem.config)
     f5 = f5_stability_penalty(
         stable, problem.topology, problem.model, problem.samples_1, problem.config

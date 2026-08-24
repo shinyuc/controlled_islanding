@@ -26,6 +26,43 @@ from baseline.config import MILPConfig
 
 ALPHA = 5.0  # UNTUNED -- inherited from the 10-node sweep, see docstring
 
+# TEMPORARY(DISABLE_RECONNECTION) -- TEST FLAG, REVERT BEFORE COMMITTING.
+#
+# THE ONE LINE TO FLIP. Set True to run this case with reconnection turned
+# off, to measure how much of the local search's cost gap comes from the
+# islanding decision alone. Set back to False afterwards: the paper needs
+# the reconnection reward, and a result produced under this flag is not a
+# result for the real formulation.
+#
+# Mirrors examples/linear_40node/config.py. The plumbing this relies on
+# already exists in islanding/ and utils/ from that work; only this
+# constant and the build_config() line below are case-specific.
+#
+# What it does, via AlgorithmConfig.disable_reconnection (see the field
+# there for why it travels on the config rather than being read from this
+# module directly):
+#   - evaluate() passes an empty E^rec to F4 and F6. F4 is then 0 by
+#     construction and F6's Psi_r reduces to Part 4 <= 0, which the hinge
+#     clips to zero -- its genuine value under no reconnection, not a mute.
+#   - the counterexample search skips the component side, which it must,
+#     or a witness from a merged component would be re-found every pass
+#     with a zeroed F6 unable to respond, and the outer loop would run to
+#     its cap instead of converging.
+#
+# SCOPE: this case only -- nothing else calls this build_config(). BOTH
+# inner solvers honour it (the MILP omits y, the eligibility rows and the
+# q families), so a flagged MILP run and a flagged local-search run are
+# comparable with each other -- but neither is comparable with an
+# unflagged run, which includes the reconnection reward.
+#
+# NOTE this case's placement is the one whose whole point is a
+# reconnection opportunity: four of the five crossings around the
+# {9,10,11,12,18,27,28} cluster are faulted precisely so (11,22) survives
+# as an eligible reconnection. Under this flag that edge can never be
+# rewarded, so the fixture is being run against something it was not
+# designed to exercise -- which is the measurement, but worth naming.
+DISABLE_RECONNECTION = True
+
 
 def build_config():
     return AlgorithmConfig(
@@ -33,6 +70,8 @@ def build_config():
         alpha_1=ALPHA, beta=1.0, k_1=0.3, P_1=20,
         alpha_2=ALPHA, gamma=1.0, k_2=0.1, P_2=20,
         epsilon=0.01, max_iterations=100, swap_supernode_edges=True,
+        # TEMPORARY(DISABLE_RECONNECTION) -- remove this line to revert.
+        disable_reconnection=DISABLE_RECONNECTION,
     )
 
 

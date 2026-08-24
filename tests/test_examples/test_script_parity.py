@@ -122,6 +122,7 @@ class _StopBeforeSolve(Exception):
 
 
 def _capture_solve_call(script, monkeypatch):
+
     """Run main() up to solve(), returning what it was actually handed.
 
     This is the only way to check the arguments main() really passes --

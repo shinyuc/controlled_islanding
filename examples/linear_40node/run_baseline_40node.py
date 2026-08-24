@@ -97,6 +97,8 @@ from examples.linear_40node.config import build_config, build_milp_config
 from utils.save import save_result, save_failure_result
 from islanding.outer_loop import solve
 from islanding.search import build_reconnected_components
+# TEMPORARY(DISABLE_RECONNECTION) -- remove this import to revert.
+from islanding.evaluate import effective_reconnection
 from islanding.counterexample import find_counterexamples_for_partition
 from islanding.cost import (
     canon, f1_unstable_nodes, f3_operation_edges,
@@ -152,6 +154,25 @@ def build_run_problem():
 def main():
     problem = build_run_problem()
     topology = problem.topology
+
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove this block to revert.
+    # Replaces the guard that used to stand here: the MILP now honours the
+    # flag (baseline/milp.py omits y, the eligibility rows and the three q
+    # families), so a flagged run is valid -- it just has to be as visibly
+    # marked as the local search's.
+    if problem.config.disable_reconnection:
+        print("=" * 72)
+        print("RECONNECTION DISABLED -- test configuration")
+        print("  The MILP is built WITHOUT the reconnection machinery: no y")
+        print("  variables, no eligibility rows, and none of the q^r/q^sr/q^rr")
+        print("  families. F4 is absent from the objective and Psi_r keeps only")
+        print("  its island-energy term. This is NOT the real formulation, and")
+        print("  is comparable only with a local-search run taken under the same")
+        print("  flag -- never with an unflagged run of either method.")
+        print("  Set DISABLE_RECONNECTION = False in")
+        print("  examples/linear_40node/config.py to restore.")
+        print("=" * 72)
+        print()
 
     # Printed before the solve, matching run_linear_40node.py, so the two
     # reports diff cleanly from their first line.
@@ -211,7 +232,14 @@ def main():
     # for one.
     stable = result.stable_islands
     unstable = result.unstable_islands
-    reconnected = result.reconnected_edges
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove these three lines to revert.
+    # The same routing the local-search scripts use. Under the flag
+    # milp_solver already returns an empty set, so this is currently a
+    # no-op here -- but the report must not depend on which solver
+    # produced the result, and the local-search scripts would diverge from
+    # these if only they applied the rule.
+    decoded_reconnected = result.reconnected_edges
+    reconnected = effective_reconnection(config, decoded_reconnected)
     components = build_reconnected_components(stable, reconnected, topology)
 
     print("=== Solve ===")
@@ -227,7 +255,9 @@ def main():
     print(f"augmentation rounds:        {result.augmentation_rounds}")
     print(f"total witnesses added:      {result.total_witnesses_added}")
     print(f"  island witnesses (F5):    {result.total_island_witnesses_added}")
-    print(f"  component witnesses (F6): {result.total_component_witnesses_added}")
+    print(f"  component witnesses (F6): {result.total_component_witnesses_added}"
+          # TEMPORARY(DISABLE_RECONNECTION) -- remove this suffix to revert.
+          f"{'   -- NOT CHECKED: component side skipped' if config.disable_reconnection else ''}")
     # The sample sets the objective below was actually computed on. On the
     # cap path these are SMALLER than initial P + total witnesses added:
     # the last pass's witnesses were appended after the final solve.
@@ -265,6 +295,55 @@ def main():
     print(f"solve time, final pass (s): {info.get('solve_time')}")
     print(f"n_vars:                     {info.get('n_vars')}")
     print(f"n_constrs:                  {info.get('n_constrs')}")
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove this block to revert.
+    # How much of the model the reconnection machinery accounts for, built
+    # both ways on THIS pass's problem. Rebuilding is cheap next to a solve
+    # and avoids quoting a figure measured on some other configuration.
+    if config.disable_reconnection:
+        from dataclasses import replace as _replace
+
+        from baseline.milp import phi_certificates, psi_certificates, build_model
+
+        # BOTH variants are built from the INITIAL problem, so the two
+        # figures differ only in the reconnection machinery.
+        #
+        # An earlier version compared the FINAL pass's n_vars/n_constrs
+        # against a reconnection-enabled model rebuilt from the initial
+        # problem. Those are different problems once the outer loop has
+        # augmented: the final model carries a sigma_Phi row per slot per
+        # island witness, so the "omitted" counts and percentages were
+        # wrong. The machinery's own size does not depend on K, so
+        # measuring both ends at K = P_1/P_2 gives the right delta; the
+        # final pass's actual size is reported separately below rather
+        # than mixed into the comparison.
+        def _size(disable):
+            variant = _replace(
+                problem, config=_replace(config, disable_reconnection=disable)
+            )
+            _phi = phi_certificates(
+                topology, variant.model, variant.config, variant.samples_1
+            )
+            _psi = psi_certificates(
+                topology, variant.model, variant.config, variant.samples_2
+            )
+            built = build_model(variant, build_milp_config(), _phi, _psi).model
+            return built.NumVars, built.NumConstrs
+
+        _v_off, _c_off = _size(disable=True)     # as this run was built
+        _v_on, _c_on = _size(disable=False)      # same K, machinery present
+        print(f"model size at the INITIAL sample sets "
+              f"(K_phi={len(problem.samples_1)}, K_psi={len(problem.samples_2)}):")
+        print(f"  without reconnection: {_v_off} vars, {_c_off} constrs")
+        print(f"  with reconnection:    {_v_on} vars, {_c_on} constrs")
+        print(f"  machinery omitted:    {_v_on - _v_off} vars "
+              f"({100.0 * (_v_on - _v_off) / _v_on:.1f}%), "
+              f"{_c_on - _c_off} constrs "
+              f"({100.0 * (_c_on - _c_off) / _c_on:.1f}%)")
+        print(f"  (the FINAL pass above solved {info.get('n_vars')} vars / "
+              f"{info.get('n_constrs')} constrs at")
+        print(f"   K_phi={result.final_K_phi}, K_psi={result.final_K_psi}; the "
+              f"difference from the first line is")
+        print( "   sigma rows added by witness augmentation, not reconnection.)")
     if info.get("status") == "TIME_LIMIT":
         print(
             "  FLAG: the final pass hit the time limit, so its partition is "
@@ -326,6 +405,10 @@ def main():
 
     print("=== Reconnection ===")
     print(f"Reconnected edges: {sorted(reconnected)}")
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove this block to revert.
+    if config.disable_reconnection and decoded_reconnected:
+        print(f"  (the partition DECODES to {sorted(decoded_reconnected)}, but the")
+        print("   objective ignored those edges entirely)")
     print(f"Reconnected components ({len(components)}):")
     component_lambda_min = []
     for component in components:
@@ -354,7 +437,9 @@ def main():
 
     print(f"F1 (unstable nodes):      {f1}")
     print(f"F3 (operation/cut edges): {f3}")
-    print(f"F4 (reconnection reward): {f4}")
+    print(f"F4 (reconnection reward): {f4}"
+          # TEMPORARY(DISABLE_RECONNECTION) -- remove this suffix to revert.
+          f"{'   -- ABSENT: no y variables in the model' if config.disable_reconnection else ''}")
     print(f"F5 (island stability):    {f5}   [samples_1, K_phi={initial_K_phi}]")
     print(f"F6 (reconnection stab.):  {f6}   [samples_2, K_psi={initial_K_psi}]")
     print()
@@ -393,8 +478,21 @@ def main():
     # Equal histories are evidence of nothing stronger than equal counts.
     economic = F(f1, 0.0, f3, f4)
     total = F(f1, 0.0, f3, f4, f5, f6)
-    print(f"Economic cost (F1 + F3 - F4):    {economic}"
-          f"   -- sample-independent, comparable across methods")
+    # TEMPORARY(DISABLE_RECONNECTION) -- restore the single print to revert.
+    # Under the flag this quantity is F1 + F3: F4 is identically zero, so
+    # the old label named a formula the number no longer follows, and the
+    # old "comparable across methods" claim contradicted the banner. Both
+    # methods now honour the flag, so flagged runs ARE comparable with each
+    # other -- just not with unflagged ones, which include the reward.
+    if config.disable_reconnection:
+        print(f"Ablated islanding cost (F1 + F3): {economic}"
+              f"   -- sample-independent; F4 is absent, so this is NOT the")
+        print( "                                  economic cost of the real")
+        print( "                                  formulation. Comparable only")
+        print( "                                  with runs under the same flag.")
+    else:
+        print(f"Economic cost (F1 + F3 - F4):    {economic}"
+              f"   -- sample-independent, comparable across methods")
     print(f"Total with penalties (+F5 +F6):  {total}"
           f"   -- on the INITIAL sample sets, K_phi={initial_K_phi}, "
           f"K_psi={initial_K_psi}")
@@ -436,7 +534,16 @@ def main():
         stable, reconnected, problem
     )
     print(f"Final island witnesses:    {len(island_witnesses)}")
-    print(f"Final component witnesses: {len(component_witnesses)}")
+    # TEMPORARY(DISABLE_RECONNECTION) -- restore the plain print to revert.
+    # Matches the local-search scripts. Without this the JSON contradicted
+    # itself: component_witnesses 0 beside component_check "SKIPPED".
+    if config.disable_reconnection:
+        print("Final component witnesses: SKIPPED -- the component-side check "
+              "is disabled,")
+        print("                           so this is 'not evaluated', NOT "
+              "'none found'.")
+    else:
+        print(f"Final component witnesses: {len(component_witnesses)}")
 
     k1_half = config.k_1 / 2
     for island in stable:
@@ -448,8 +555,11 @@ def main():
                 "-- passes the counterexample check but still contributes to F5"
             )
 
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove the guard to revert. The
+    # message below claims the component "passes the counterexample check";
+    # under the flag that check never ran, so saying so would be false.
     k2_half = config.k_2 / 2
-    for component in components:
+    for component in components if not config.disable_reconnection else []:
         nodes = sorted(component.nodes())
         lam = _lambda_min(nodes, list(component.edges()))
         if lam < k2_half:
@@ -484,7 +594,10 @@ def main():
             "K_phi": initial_K_phi, "K_psi": initial_K_psi,
         },
         final_island_witnesses=len(island_witnesses),
-        final_component_witnesses=len(component_witnesses),
+        # TEMPORARY(DISABLE_RECONNECTION) -- restore the plain len() to revert.
+        final_component_witnesses=(
+            None if config.disable_reconnection else len(component_witnesses)
+        ),
     )
     print(f"Saved result to {path}")
 

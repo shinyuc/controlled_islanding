@@ -160,6 +160,16 @@ def find_counterexamples_for_partition(stable_islands, reconnected_edges, proble
             )
         )
 
+    # TEMPORARY(DISABLE_RECONNECTION) -- test flag, revert before committing.
+    # The component side must be skipped, not merely ignored. This search
+    # decodes independently of F6, so it would still check the real merged
+    # components and emit witnesses into samples_2 for any unstable one.
+    # With F6 pinned at zero by the empty E^rec, nothing can respond to
+    # such a witness: the next pass finds it again, and the outer loop
+    # runs to its cap instead of converging.
+    if config.disable_reconnection:
+        return island_witnesses, []
+
     component_witnesses = []
     for component in components:
         component_witnesses.extend(

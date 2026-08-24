@@ -18,6 +18,8 @@ from pathlib import Path
 
 from islanding.cost import canon
 from islanding.search import build_reconnected_components
+# TEMPORARY(DISABLE_RECONNECTION) -- remove this import to revert.
+from islanding.evaluate import effective_reconnection
 
 # utils/save.py -> utils/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -139,7 +141,7 @@ def _check_seed_consistency(method, tree_init_seed):
         )
 
 
-def _method_block(method, result):
+def _method_block(method, result, result_config_disable_reconnection=False):
     """Solver identity plus the diagnostics that make a run interpretable.
 
     Without this a time-limited MILP result and a proven-optimal one
@@ -153,6 +155,17 @@ def _method_block(method, result):
     """
     info = result.info
     block = {"name": method, "reason_scope": _REASON_SCOPE_NOTE}
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove this override to revert.
+    # The permanent note says convergence means the partition passed the
+    # stability oracle with no counterexample. Under the flag only HALF the
+    # oracle ran, so that sentence would overstate what termination means.
+    if result_config_disable_reconnection:
+        block["reason_scope"] = (
+            "RECONNECTION DISABLED. `reason` reflects the ISLAND side only: "
+            "'converged' means no island-side witness was found AND component "
+            "stability was deliberately not evaluated. It is NOT the usual "
+            "claim that the partition passed the stability oracle."
+        )
 
     if method == MILP:
         status = info.get("status")
@@ -317,7 +330,11 @@ def save_result(
     # inner solver may not have produced one (a MILP does not).
     stable = result.stable_islands
     unstable = result.unstable_islands
-    reconnected = result.reconnected_edges
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove these three lines to revert.
+    # The set the OBJECTIVE used, not the one the partition decodes to.
+    # Without this the JSON records reconnections the run ignored.
+    decoded_reconnected = result.reconnected_edges
+    reconnected = effective_reconnection(problem.config, decoded_reconnected)
     components = build_reconnected_components(stable, reconnected, topology)
 
     # Guard the index alignment: a mis-wired call site would otherwise
@@ -356,7 +373,14 @@ def save_result(
         # no partition, no cost terms and no lambda_min lists.
         "outcome": "solved",
         "runtime_seconds": float(runtime_seconds),
-        "method": _method_block(method, result),
+        "method": _method_block(
+            # TEMPORARY(DISABLE_RECONNECTION) -- drop the third arg to revert.
+            method, result, problem.config.disable_reconnection
+        ),
+        # TEMPORARY(DISABLE_RECONNECTION) -- remove this entry to revert.
+        # Top level, not buried in `config`, so a result taken under the
+        # test flag cannot be mistaken for a normal one at a glance.
+        "reconnection_disabled": bool(problem.config.disable_reconnection),
         "sample_seed": _plain(sample_seed),
         # None for a solver with no tree to initialise. Recorded separately
         # from sample_seed because they are independent knobs.
@@ -427,8 +451,28 @@ def save_result(
         ],
         "final_stability_check": {
             "island_witnesses": int(final_island_witnesses),
-            "component_witnesses": int(final_component_witnesses),
+            # TEMPORARY(DISABLE_RECONNECTION) -- restore the plain int() and
+            # drop "component_check" to revert. null, never 0: under the
+            # flag the component side is not evaluated, and a numeric zero
+            # would read as "checked, found none".
+            "component_witnesses": (
+                None if final_component_witnesses is None
+                else int(final_component_witnesses)
+            ),
+            "component_check": (
+                "SKIPPED -- reconnection disabled; component stability was "
+                "not evaluated, so `reason` reflects the ISLAND side only"
+                if problem.config.disable_reconnection else "performed"
+            ),
         },
+        # TEMPORARY(DISABLE_RECONNECTION) -- remove this entry to revert.
+        # What the partition decoded to, kept for debugging only. The
+        # objective ignored these edges; `reconnected_edges` above is what
+        # it actually used.
+        "decoded_reconnected_edges_ignored_by_objective": (
+            [list(edge) for edge in sorted(decoded_reconnected)]
+            if problem.config.disable_reconnection else []
+        ),
     }
 
     with open(path, "w") as f:
@@ -555,6 +599,10 @@ def save_failure_result(
             {key: _plain(value) for key, value in entry.items()}
             for entry in state.get("pass_history", ())
         ],
+        # TEMPORARY(DISABLE_RECONNECTION) -- remove this entry to revert.
+        # Top level, not buried in `config`, so a result taken under the
+        # test flag cannot be mistaken for a normal one at a glance.
+        "reconnection_disabled": bool(problem.config.disable_reconnection),
         "sample_seed": _plain(sample_seed),
         # None for a solver with no tree to initialise. Recorded separately
         # from sample_seed because they are independent knobs.

@@ -10,6 +10,8 @@ import numpy as np
 
 from islanding.cost import canon
 from islanding.inner import InnerSolveFailure
+# TEMPORARY(DISABLE_RECONNECTION) -- remove this import to revert.
+from islanding.evaluate import effective_reconnection
 
 
 @dataclass(frozen=True)
@@ -280,6 +282,17 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
     config = problem.config
     cost_data = problem.cost_data
 
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove this and every `if
+    # reconnect:` guard below to revert.
+    #
+    # OMISSION, not y_ij == 0. Pinning the variables would leave the whole
+    # reconnection machinery in the model -- y, the eligibility rows, and
+    # the three q families that hang off them -- for the solver to fix at
+    # zero. Not generating them is smaller, and makes "this run has no
+    # reconnection" a structural property of the model rather than
+    # something a reader has to infer from bounds.
+    reconnect = not config.disable_reconnection
+
     order, _, edges, neighbors = _index_sets(topology)
     N = len(order)
     pos = {node: idx + 1 for idx, node in enumerate(order)}
@@ -302,7 +315,11 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
             g[(i, r)] = model.addVar(lb=0.0, ub=1.0, name=f"g[{i},{r}]")
 
     b = {r: model.addVar(vtype=GRB.BINARY, name=f"b[{r}]") for r in order}
-    y = {e: model.addVar(vtype=GRB.BINARY, name=f"y[{e[0]},{e[1]}]") for e in edges}
+    # TEMPORARY(DISABLE_RECONNECTION) -- restore the plain dict to revert.
+    y = (
+        {e: model.addVar(vtype=GRB.BINARY, name=f"y[{e[0]},{e[1]}]") for e in edges}
+        if reconnect else {}
+    )
 
     w, wb, xi = {}, {}, {}
     for (i, j) in edges:
@@ -325,10 +342,14 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
     # variables (and min(i,k) likewise for q^r), silently dropping an
     # island's reconnection contribution from its Psi row.
     qr = {}
-    for i in order:
-        for k in neighbors[i]:
-            for r in _slots_for(pos, pos[i]):
-                qr[(r, (i, k))] = model.addVar(lb=0.0, ub=1.0, name=f"qr[{r},{i},{k}]")
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove the guard to revert. Every
+    # q family is a product with y, so all three are empty without it.
+    if reconnect:
+        for i in order:
+            for k in neighbors[i]:
+                for r in _slots_for(pos, pos[i]):
+                    qr[(r, (i, k))] = model.addVar(
+                        lb=0.0, ub=1.0, name=f"qr[{r},{i},{k}]")
 
     # tau and qrr are ALIASED on the diagonal (k == j), so no variable is
     # created there: tau_{r,ijj} = wb_{r,ij} and qrr_{r,ijj} = qr_{r,ij}.
@@ -342,13 +363,17 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
                     if k != j:
                         tau[(r, (i, j, k))] = model.addVar(
                             lb=0.0, ub=1.0, name=f"tau[{r},{i},{j},{k}]")
-                for r in _slots_for(pos, min(pos[i], pos[j])):
-                    qsr[(r, (i, j, k))] = model.addVar(
-                        lb=0.0, ub=1.0, name=f"qsr[{r},{i},{j},{k}]")
-                for r in _slots_for(pos, pos[i]):
-                    if k != j:
-                        qrr[(r, (i, j, k))] = model.addVar(
-                            lb=0.0, ub=1.0, name=f"qrr[{r},{i},{j},{k}]")
+                # TEMPORARY(DISABLE_RECONNECTION) -- remove the guard to
+                # revert. tau is unaffected: it is a product with a_kr, not
+                # with y, and carries Phi^t on the F5 side.
+                if reconnect:
+                    for r in _slots_for(pos, min(pos[i], pos[j])):
+                        qsr[(r, (i, j, k))] = model.addVar(
+                            lb=0.0, ub=1.0, name=f"qsr[{r},{i},{j},{k}]")
+                    for r in _slots_for(pos, pos[i]):
+                        if k != j:
+                            qrr[(r, (i, j, k))] = model.addVar(
+                                lb=0.0, ub=1.0, name=f"qrr[{r},{i},{j},{k}]")
 
     sigma_phi = {
         (r, ell): model.addVar(lb=0.0, name=f"sPhi[{r},{ell}]")
@@ -409,6 +434,8 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
         model.addConstr(var >= base + a[(k, r)] - 1, name=f"tau_lb[{r},{i},{j},{k}]")
 
     # -- (eq:milp:qr) qr_r,ik = g_ir * y_ik --------------------------------
+    # TEMPORARY(DISABLE_RECONNECTION): these three blocks need no guard --
+    # they iterate the q dicts, which are empty under the flag.
     for (r, (i, k)), var in qr.items():
         edge = canon((i, k))
         model.addConstr(var <= g[(i, r)], name=f"qr_ub_g[{r},{i},{k}]")
@@ -439,7 +466,9 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
         )
         for edge in edges
     }
-    for (i, j) in edges:
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove the guard to revert. z is
+    # still built above: the cut-cost term in the objective needs it.
+    for (i, j) in edges if reconnect else []:
         model.addConstr(y[(i, j)] <= 1 - z[(i, j)], name=f"elig_cut[{i},{j}]")
         model.addConstr(
             y[(i, j)] <= gp.quicksum(g[(i, r)] for r in _slots_for(pos, pos[i])),
@@ -503,21 +532,30 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
         ]
         # Ranges mirror the variable families above: qr and qrr need only
         # i in slot r; qsr needs i and j.
+        # TEMPORARY(DISABLE_RECONNECTION) -- drop the `if reconnect else []`
+        # to revert. Psi_r's Parts 1-3 all sum over reconnected neighbours,
+        # so with no reconnection the row keeps only the g and wb terms
+        # carrying Psi^n and Psi^e, i.e. -(k_1 - k_2) * W_r. That is
+        # nonpositive whenever k_1 >= k_2 (which AlgorithmConfig enforces),
+        # so the sigma >= 0 epigraph clips it and sigma_psi is 0 at
+        # optimality -- the same value the local search's per-island hinge
+        # produces. Asserted in tests/test_disable_reconnection.py rather
+        # than assumed.
         pair_terms = [
             ((i, k), psi_cert.Psi_r[(i, k)])
             for i in order for k in neighbors[i]
             if pos[i] >= r_rank
-        ]
+        ] if reconnect else []
         sr_terms = [
             ((i, j, k), psi_cert.Psi_sr[(i, j, k)])
             for i in order for j in neighbors[i] for k in neighbors[i]
             if min(pos[i], pos[j]) >= r_rank
-        ]
+        ] if reconnect else []
         rr_terms = [
             ((i, j, k), psi_cert.Psi_rr[(i, j, k)])
             for i in order for j in neighbors[i] for k in neighbors[i]
             if pos[i] >= r_rank
-        ]
+        ] if reconnect else []
         for ell in range(psi_cert.K):
             rhs = gp.quicksum(g[(i, r)] * arr[ell] for i, arr in node_terms)
             rhs += gp.quicksum(wb[(r, e)] * arr[ell] for e, arr in edge_terms)
@@ -549,7 +587,13 @@ def build_model(problem, milp_config, phi_cert, psi_cert):
     cut_cost = alpha_0 * gp.quicksum(
         cost_data.edge_costs[e] * (1 - z[e]) for e in edges
     )
-    rec_reward = alpha_1 * gp.quicksum(cost_data.edge_costs[e] * y[e] for e in edges)
+    # TEMPORARY(DISABLE_RECONNECTION) -- restore the plain sum to revert.
+    # With y omitted the reward is identically zero; written as 0.0 rather
+    # than summed over an empty dict so the intent is explicit.
+    rec_reward = (
+        alpha_1 * gp.quicksum(cost_data.edge_costs[e] * y[e] for e in edges)
+        if reconnect else 0.0
+    )
     phi_pen = alpha_2 * mu_phi * gp.quicksum(sigma_phi.values())
     psi_pen = alpha_3 * mu_psi * gp.quicksum(sigma_psi.values())
 
@@ -804,6 +848,13 @@ def milp_solver(problem, milp_config, initial_tree=None):
         )
 
     stable, unstable, reconnected = _decode(built)
+    # TEMPORARY(DISABLE_RECONNECTION) -- remove these two lines to revert.
+    # _decode already returns an empty set (it reads built.y, which is
+    # empty under the flag), but say it outright: the shared outer loop and
+    # the save path must see exactly what the local search sees, and that
+    # must not depend on a coincidence of the decode.
+    reconnected = effective_reconnection(config, reconnected)
+
     objective = model.ObjVal
 
     return InnerResult(
