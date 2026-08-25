@@ -14,6 +14,7 @@ pipeline.
 """
 
 import math
+import weakref
 from dataclasses import dataclass
 from typing import Callable
 
@@ -348,6 +349,15 @@ class SystemModel:
     # linear; Kuramoto and any model with nonzero edge energy do not, and
     # must leave this None.
     #
+    # Verified at the point of USE, in f5_stability_penalty, against the
+    # model's own callables -- per island, so an island that happens to
+    # agree cannot vouch for the others. A DIRECT call to
+    # model.island_quadratic_form(...) bypasses that check entirely. That
+    # is accepted rather than closed: no solver path makes one -- the
+    # MILP, the counterexample search and F6 all ignore this field -- so
+    # the only direct callers are tests, which is where a raw matrix is
+    # legitimately wanted.
+    #
     # WARNING -- dataclasses.replace INHERITS this field. Deriving a model
     # by swapping W_ij, grad_W_ij, f_i or f_ij while leaving this set
     # gives a fast path whose closed form no longer describes the model,
@@ -542,7 +552,7 @@ def linear_consensus_model(node_weights, edge_weights):
     )
 
 
-def _stability_bracket(nodes, edges, neighbors, states, model, k):
+def _stability_bracket(nodes, edges, neighbors, states, model, k, hinge=True):
     """Shared bracket computation for F5 and F6 (spec sections 9 and 14).
 
     `nodes` is the unit's node set (an island for F5, a reconnected
@@ -567,7 +577,253 @@ def _stability_bracket(nodes, edges, neighbors, states, model, k):
     W += sum(model.W_ij(u, v, states[u], states[v]) for u, v in edges)
 
     bracket = sum(float(np.dot(grad_W[i], dyn[i])) for i in nodes) + k * W
-    return max(bracket, 0.0)
+    # hinge=False gives the RAW bracket. The verification below needs it:
+    # comparing hinged values hides any disagreement where both sides are
+    # negative, which the clip flattens to 0.0 == 0.0.
+    return max(bracket, 0.0) if hinge else bracket
+
+
+
+
+# Structural keys already verified, per model. A WeakKeyDictionary rather
+# than a module-level set of callable tuples: the old form held strong
+# references to seven callables per variant, and island_quadratic_form's
+# closure retains the weight dictionaries and every cached island matrix,
+# so a parameter sweep -- each linear_consensus_model call making fresh
+# function objects -- grew memory with every construction. Keyed by the
+# model, the whole entry is collected when the model is.
+_verified_quadratic_forms = weakref.WeakKeyDictionary()
+
+
+# How many dense fractional probes to add. Four is enough that a
+# perturbation would have to be simultaneously orthogonal to all of them
+# to hide; each costs one bracket evaluation per island.
+_DENSE_PROBES = 4
+
+# The float64 nearest 1/phi = 0.6180..., used as a multiplicative stride
+# mod 1. It is a RATIONAL number like every IEEE float, so the sequence
+# does have a period -- it is a fixed rotation of the unit interval, and
+# successive slots are structurally related, not "unrelated". What it
+# gives is spread: the low-discrepancy property of the golden-ratio
+# rotation keeps consecutive values from clustering, so the dense probes
+# sample distinct directions rather than nearly parallel ones. It is
+# deterministic, which is the other half of why it is used -- no RNG
+# state to depend on.
+_PROBE_STRIDE = 0.6180339887498949
+
+
+def _quadratic_form_probes(size, d):
+    """States for checking a claimed quadratic form.
+
+    WHAT THESE DO AND DO NOT ESTABLISH. A state here is a point in
+    R^(size x d), so a general symmetric quadratic bracket over it has
+    (n d)(n d + 1) / 2 coefficients, where n = size. Basis vectors and
+    pairwise sums over all n*d COORDINATE SLOTS determine every one of
+    them -- e_s gives the diagonal coefficient at slot s, and e_s + e_t
+    gives that pair's diagonal terms plus twice their cross term -- so
+    for a bracket already known to be a symmetric quadratic form, this
+    set is complete.
+
+    It was NOT complete when the basis and pairwise probes ranged over
+    MEMBERS at coordinate 0 only. That set pins the n(n+1)/2 coefficients
+    of a coordinate-DECOUPLED form, which is what the closed form
+    asserts, but a replaced callable need not produce one. A singleton
+    island at d = 4 has 10 general coefficients and received 6 probes;
+    the nullspace is nonzero, and a purely LINEAR replacement -- bracket
+    still quadratic, so not the nonlinear limitation below -- was found
+    in it that agreed with the closed form on every probe to 6.2e-15
+    while the two disagreed by 8.888310483792408 on an ordinary state.
+    Probing all n*d slots removes that nullspace.
+
+    What remains open is arbitrary callable replacement, which is what
+    can make the true bracket non-quadratic in the first place: a
+    perturbation proportional to sum_c x_c^2 (x_c - 1)^2, with its
+    gradient, vanishes whenever every coordinate is 0 or 1, so it passes
+    every unit probe while leaving the closed form wrong on ordinary
+    fractional states.
+
+    So the unit probes are supplemented rather than relied on:
+
+      * basis and pairwise sums over all n*d slots at unit amplitude --
+        pin every coefficient of a general symmetric quadratic bracket;
+      * one all-coordinates state per member -- redundant for a genuine
+        quadratic form, but not for a nonlinear one: it puts every
+        coordinate of one member simultaneously at unit amplitude, which
+        no basis or pairwise probe does, and a nonlinear coupling can be
+        constructed that hides from all of those and from the dense
+        probes yet fires here (see the test of that name);
+      * dense deterministic vectors with fractional, mixed-sign entries in
+        every (member, coordinate) slot -- these are where a perturbation
+        that vanishes on {0, 1} coordinates shows up.
+
+    That is a strengthening, not a completeness proof: no finite set of
+    probes can certify an arbitrary nonlinear callable. It closes the
+    quadratic case entirely, and the perturbations that unit-amplitude
+    probes structurally cannot see.
+
+    WHAT IT COSTS. Probing all slots is O((n d)^2) bracket evaluations
+    per structural key, against O(n^2) before -- about d^2 = 4x here, and
+    each bracket is itself O(n + |E_r|). Measured, as a share of total
+    run time spent inside _verify_quadratic_form: 1.6% -> 4.4% on the
+    10-node case, 2.6% -> 8.7% on the 20-node, 5.3% -> 17.8% on the
+    30-node. A single whole-graph island at n = 50, d = 2 takes 5104
+    probes and 2.15 s against 1329 and 0.57 s. The share grows like n^3
+    against the rest of the run, which it did before this change too --
+    the change multiplies it by a constant. If it ever becomes the
+    dominant cost at 50 nodes, the alternative is to go back to
+    member-only probes and narrow the claim to coordinate-decoupled
+    brackets; it is not acceptable to keep the wider claim on the
+    narrower probe set.
+
+    Only the FIRST call for a structural key pays this. Repeat calls hit
+    the registry and cost about 1.2 us: on the 20-node run, 368 keys took
+    9.92 s of probing and the other 139,525 calls took 0.17 s in total.
+
+    AMPLITUDE AND TOLERANCE. The probes run at amplitude ~1 and the
+    caller applies a ~1e-9 tolerance. Quadratic error scales with
+    ||x||^2, so a coefficient error just under the threshold here can
+    exceed it on a larger state: the effective bar on real samples is
+    looser than 1e-9 by the square of the sample radius. Samples are drawn
+    on ||x|| <= sqrt(2 (1 + inflation) beta), which is about 1.41 at the
+    configs used here, so that factor is roughly 2 -- immaterial. It would
+    stop being immaterial for a much larger beta, and the probe amplitude
+    or the tolerance would need to move with it.
+    """
+    probes = []
+
+    # Over SLOTS (member, coordinate), not members: a general symmetric
+    # quadratic form couples slots, and probing only coordinate 0 leaves
+    # every cross-coordinate coefficient unconstrained.
+    slots = [(a, c) for a in range(size) for c in range(d)]
+
+    for a, c in slots:
+        x = np.zeros((size, d))
+        x[a, c] = 1.0
+        probes.append(x)
+
+    for index, (a, c) in enumerate(slots):
+        for b, e in slots[index + 1:]:
+            x = np.zeros((size, d))
+            x[a, c] = 1.0
+            x[b, e] = 1.0
+            probes.append(x)
+
+    if d > 1:
+        for a in range(size):
+            x = np.zeros((size, d))
+            x[a, :] = 1.0
+            probes.append(x)
+
+    for offset in range(_DENSE_PROBES):
+        x = np.empty((size, d))
+        for a in range(size):
+            for c in range(d):
+                slot = (a * d + c) + offset * 7919
+                x[a, c] = 2.0 * (((slot + 1) * _PROBE_STRIDE) % 1.0) - 1.0
+        probes.append(x)
+
+    return probes
+
+
+def _verify_quadratic_form(model, island, edges_r, config, d):
+    """Check a model's closed form against its own callables, per island.
+
+    THE HAZARD. `island_quadratic_form` is derived from W_i, W_ij, f_i and
+    f_ij, but `dataclasses.replace` INHERITS it when any of those is
+    swapped, leaving a form that no longer describes the model. F5 then
+    returns a different number with no error and no signature mismatch.
+
+    PER STRUCTURAL KEY, not once per model. An earlier version verified
+    only the first island of the first call and then trusted the model
+    forever. That let the historical stale form through: checked on the
+    singleton island {1}, which has no internal edges, the stale linear
+    form and the modified model agree -- and a later call on {1,2,3}
+    silently returned 2.6530981659254214 where the truth is
+    9.806501205737511. Keying on (island nodes, induced edges, k_1, d) --
+    d included, see the comment on `key` below -- means each newly
+    encountered island is checked on its own merits.
+
+    WHY PROBES RATHER THAN THE CALL'S SAMPLES. Samples make a blind
+    verifier: an all-zero set agrees trivially, a set whose errors cancel
+    across samples agrees after summation, and a set landing where both
+    raw brackets are negative agrees after the hinge. The probes are
+    deterministic and independent of whatever states a run happens to
+    hold. See _quadratic_form_probes for what they do and do not
+    establish -- they are complete for a symmetric QUADRATIC bracket, not
+    a proof against arbitrary nonlinear replacement.
+
+    THE PROBES ARE float64, and dtype is deliberately absent from the
+    key: `f5_stability_penalty` rejects any other sample dtype before
+    reaching here, so there is only one to verify against. Adding dtype
+    to the key would NOT have been enough on its own -- the probes are
+    built as float64 regardless, so a float32 model would still have been
+    checked in the wrong precision.
+
+    WHY __post_init__ CANNOT DO THIS. `replace()` does call __post_init__,
+    including for frozen dataclasses (verified, contrary to a common
+    assumption), so a check there would run -- but the callables are keyed
+    by REAL node identifiers (`node_weights[i]`), so it has no data to
+    probe with until an actual island exists.
+    """
+    # d belongs in the key: the probe SET depends on it (the
+    # all-coordinates probes exist only for d > 1), so a model verified
+    # at d = 1 has not been checked for cross-coordinate behaviour at
+    # all. Omitting it let a model whose f_i couples coordinates only
+    # when d > 1 pass at d = 1 and then run unchecked at d = 2. This
+    # project evaluates one model at more than one dimension -- the F6
+    # d=1 and d=2 tests do exactly that.
+    key = (frozenset(island), frozenset(edges_r), config.k_1, d)
+    try:
+        seen = _verified_quadratic_forms.setdefault(model, set())
+        if key in seen:
+            return
+    except TypeError:
+        # A model carrying an unhashable or non-weak-referenceable
+        # callable cannot be registered. Verify on every call rather than
+        # crash: slower, never wrong.
+        seen = None
+
+    members, B = model.island_quadratic_form(island, edges_r, config.k_1)
+
+    neighbors = {i: set() for i in island}
+    for u, v in edges_r:
+        neighbors[u].add(v)
+        neighbors[v].add(u)
+
+    for probe in _quadratic_form_probes(len(members), d):
+        closed_form = float(np.einsum("ic,ij,jc->", probe, B, probe))
+        states = {node: probe[index] for index, node in enumerate(members)}
+        # RAW, and one probe at a time: summing first would let positive
+        # and negative discrepancies cancel, and hinging first would hide
+        # any disagreement below zero entirely.
+        from_loop = _stability_bracket(
+            island, edges_r, neighbors, states, model, config.k_1, hinge=False
+        )
+
+        # Explicitly, before the tolerance: abs(nan - nan) > tol is False,
+        # so two NaNs -- or two identical infinities -- would otherwise be
+        # read as agreement and mark the island verified.
+        finite = math.isfinite(closed_form) and math.isfinite(from_loop)
+        if not finite or (
+            abs(closed_form - from_loop) > 1e-9 + 1e-9 * abs(from_loop)
+        ):
+            raise ValueError(
+                "island_quadratic_form does not match this model's own "
+                f"callables on island {sorted(island)}: the closed form "
+                f"gives {closed_form!r} where evaluating "
+                f"W_i/W_ij/f_i/f_ij directly gives {from_loop!r}"
+                + ("" if finite else " (one or both is not finite)") + ".\n"
+                "  The closed form is derived from those callables, but "
+                "dataclasses.replace INHERITS it, so a model built by "
+                "swapping any of them keeps a form that no longer "
+                "describes it.\n"
+                "  Pass island_quadratic_form=None when deriving a model "
+                "whose energy or dynamics differ (see SystemModel), or "
+                "supply a closed form valid for the new model."
+            )
+
+    if seen is not None:
+        seen.add(key)
 
 
 def f5_stability_penalty(stable_islands, topology, model, samples, config):
@@ -612,11 +868,47 @@ def f5_stability_penalty(stable_islands, topology, model, samples, config):
     # the 10- to 50-node cases is near that.
     quadratic_form = model.island_quadratic_form
     if quadratic_form is not None:
+        # DTYPE IS PART OF WHAT THE CLOSED FORM CLAIMS. The verification
+        # below probes the model's callables in float64. A model whose
+        # callables agree with the closed form in float64 and diverge in
+        # another precision -- a cast, a lookup keyed on dtype, an
+        # accumulation that rounds differently -- would be verified with
+        # the wrong probes and then evaluated with the wrong number: a
+        # float32 case gave a fast-path 0.0 against a loop value of 1.15.
+        #
+        # Rejected rather than verified per dtype, because verifying in
+        # float32 is not merely more code: the 1e-9 tolerance below is
+        # roughly float64 epsilon times a small factor, and float32 holds
+        # about 1e-7 relative precision, so honest float32 evaluation
+        # would fail the check on rounding alone. Every sampler in this
+        # codebase produces float64 (utils.sampling draws from
+        # np.random.Generator.normal), so this rejects nothing that is
+        # actually generated here.
+        if samples.dtype != np.float64:
+            raise ValueError(
+                f"F5's fast path requires float64 samples, got "
+                f"{samples.dtype}. The closed form is checked against "
+                "this model's own callables using float64 probes, so a "
+                "model that agrees in float64 but differs in "
+                f"{samples.dtype} would pass verification and then be "
+                "evaluated wrongly. Verifying in a lower precision is "
+                "not a workaround: the check's 1e-9 tolerance is below "
+                "what float32 can deliver. Cast the samples to float64, "
+                "or clear island_quadratic_form to use the direct loop, "
+                "which evaluates the callables in whatever precision it "
+                "is given."
+            )
+
         total = 0.0
         for island in stable_islands:
-            members, B = quadratic_form(
-                island, _induced_edges(island, topology), config.k_1
+            edges_r = _induced_edges(island, topology)
+            # Per island, not once per model: a first island that happens
+            # to agree must not bless the rest of this call, let alone
+            # every later one. See _verify_quadratic_form.
+            _verify_quadratic_form(
+                model, island, edges_r, config, samples.shape[2]
             )
+            members, B = quadratic_form(island, edges_r, config.k_1)
             rows = [node_index[node] for node in members]
             X = samples[:, rows, :]                     # (P, n_r, d)
             brackets = np.einsum("pic,ij,pjc->p", X, B, X)
