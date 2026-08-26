@@ -39,7 +39,7 @@ from examples.linear_10node import run_linear_10node, run_baseline_10node
 from examples.linear_20node import run_linear_20node, run_baseline_20node
 from examples.linear_30node import run_linear_30node, run_baseline_30node
 from examples.linear_40node import run_linear_40node, run_baseline_40node
-from examples.linear_50node import run_linear_50node
+from examples.linear_50node import run_linear_50node, run_baseline_50node
 
 
 # (case name, local-search script, MILP baseline script)
@@ -48,16 +48,18 @@ PAIRS = [
     ("20node", run_linear_20node, run_baseline_20node),
     ("30node", run_linear_30node, run_baseline_30node),
     ("40node", run_linear_40node, run_baseline_40node),
+    ("50node", run_linear_50node, run_baseline_50node),
 ]
 PAIR_IDS = [pair[0] for pair in PAIRS]
 
 # Every script individually, for the checks that are about one script's
-# internal consistency rather than a pair's agreement.
-# Every script, INCLUDING the two with no MILP counterpart: the
-# execution-path checks below are about one script's internal consistency
-# (does main() solve what its builder returns, with the constants it
-# advertises), which applies just as much where there is nothing to pair
-# with. Only PAIRS above is restricted to cases that have both methods.
+# internal consistency rather than a pair's agreement -- does main() solve
+# what its builder returns, with the constants it advertises.
+#
+# This list and PAIRS above now cover the same cases, since every case has
+# both methods. They are kept separate anyway: the split is by what the
+# check needs, not by which cases happen to exist, so a future case added
+# with only a local-search script belongs here and not in PAIRS.
 SCRIPTS = [
     ("10node-local", run_linear_10node),
     ("10node-milp", run_baseline_10node),
@@ -68,6 +70,7 @@ SCRIPTS = [
     ("40node-local", run_linear_40node),
     ("40node-milp", run_baseline_40node),
     ("50node-local", run_linear_50node),
+    ("50node-milp", run_baseline_50node),
 ]
 SCRIPT_IDS = [entry[0] for entry in SCRIPTS]
 LOCAL_SCRIPTS = [entry for entry in SCRIPTS if entry[0].endswith("local")]
