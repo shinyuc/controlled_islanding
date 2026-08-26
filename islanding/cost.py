@@ -16,7 +16,7 @@ pipeline.
 import math
 import weakref
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import numpy as np
 
@@ -292,6 +292,117 @@ def F(f1, f2, f3, f4, f5=0.0, f6=0.0):
     return f1 + f2 + f3 - f4 + f5 + f6
 
 
+class _StateDomain(NamedTuple):
+    """The (shape, dtype) signature a set of node states shares.
+
+    Every verification registry in this file is keyed on a structural
+    identity PLUS the domain the check ran over, and the domain half has
+    now been got wrong three times: the F5 closed form's key omitted d,
+    then omitted dtype, and _verify_zero_pairwise's key omitted both. The
+    shape of the failure is identical each time -- an entry recorded under
+    one domain suppresses a later, materially different check -- so the
+    domain is built by one shared helper rather than assembled by hand at
+    each site.
+
+    Only the domain is shared. The rest of each key is genuinely local:
+    F5's is (island nodes, induced edges, k_1), and
+    _verify_zero_pairwise's is the edge. Factoring those together would
+    force a common shape on keys that have no reason to share one.
+    """
+
+    shape: tuple
+    dtype: np.dtype
+
+
+def _state_domain(states, where):
+    """The domain `states` share, validated rather than assumed.
+
+    `states` is either a sequence of per-node 1-D state vectors, or a
+    single 2-D ndarray whose rows are those vectors.
+
+    VALIDATES EQUALITY ACROSS STATES, which is the point. Reading the
+    domain off the FIRST state alone is what makes a mixed call
+    dangerous: _verify_zero_pairwise takes a generic dict, so a call whose
+    two endpoints differ in shape or dtype would register under the first
+    endpoint's signature and suppress a later check on a materially
+    different domain. Every production caller passes slices of one
+    homogeneous samples array, so this cannot happen today -- which is
+    exactly why it would go unnoticed if it ever could.
+    """
+    if isinstance(states, np.ndarray) and states.ndim == 2:
+        # A single array cannot hold rows of differing shape or dtype, so
+        # the equality check below would be vacuous. Shape is validated,
+        # which is the part that can still be wrong.
+        return _StateDomain((states.shape[1],), states.dtype)
+
+    arrays = [np.asarray(x) for x in states]
+    if not arrays:
+        raise ValueError(f"{where}: no states to take a domain from")
+
+    first = arrays[0]
+    if first.ndim != 1:
+        raise ValueError(
+            f"{where}: states must be 1-D vectors, got shape {first.shape}. "
+            "The probe set and the registry key are both built from this "
+            "signature, so a state of another rank would be checked in a "
+            "domain it does not belong to."
+        )
+    for other in arrays[1:]:
+        if other.shape != first.shape or other.dtype != first.dtype:
+            raise ValueError(
+                f"{where}: states do not share a domain -- "
+                f"{first.shape}/{first.dtype} against "
+                f"{other.shape}/{other.dtype}. One signature cannot "
+                "describe both, and recording the check under either "
+                "would suppress a later one on the other."
+            )
+    return _StateDomain(first.shape, first.dtype)
+
+
+# Shared read-only zero arrays, keyed by (shape, dtype). Module level
+# rather than per model: the arrays are immutable and carry no model
+# state, and _psi_reconnection needs one for its reconnection-flow
+# accumulator without having a model closure to reach into.
+_zero_arrays = {}
+
+
+def _shared_zero(like):
+    """A cached read-only zeros array with `like`'s shape and dtype.
+
+    THE CONTRACT, stated narrowly. This is a correct substitute for
+    np.zeros_like on ORDINARY ndarrays whose (shape, dtype) determine the
+    result -- which is what every caller passes: a 1-D slice of a samples
+    array. NOT float64 only. The key carries dtype precisely so a float32
+    state gets a float32 zero, which _verify_zero_pairwise now depends on:
+    it checks declarations in whatever precision the run supplies rather
+    than restricting to one.
+
+    It is NOT a general equivalent, because the key omits two things
+    zeros_like honours:
+      - memory order. A C-contiguous (2,2) followed by an F-contiguous
+        (2,2) gets the cached C-contiguous zero, where zeros_like would
+        return F-contiguous.
+      - subclass. An ndarray followed by an np.matrix of the same shape
+        and dtype gets an ndarray, where zeros_like(matrix) returns a
+        matrix.
+    Neither reaches the current callers, and neither would change a value
+    -- only layout and type. Widen the key before using this with
+    F-ordered or subclassed states.
+
+    READ-ONLY, so it is only ever a legitimate STARTING VALUE for an
+    accumulator that REBINDS (`acc = acc + term`), never one that
+    accumulates in place (`acc += term`) -- the latter would raise, which
+    is the point of writeable=False.
+    """
+    key = (like.shape, like.dtype)
+    zero = _zero_arrays.get(key)
+    if zero is None:
+        zero = np.zeros_like(like)
+        zero.flags.writeable = False
+        _zero_arrays[key] = zero
+    return zero
+
+
 @dataclass(frozen=True)
 class SystemModel:
     """Bundles the seven callables F5 needs (spec section 10).
@@ -373,6 +484,39 @@ class SystemModel:
     # trace(X.T @ B @ X).
     island_quadratic_form: Callable = None
 
+    # OPTIONAL declaration, same opt-in pattern as the fields above: True
+    # asserts that this model's PAIRWISE Lyapunov terms are identically
+    # zero -- W_ij(i, j, x_i, x_j) == 0.0 and grad_W_ij(...) == (0, 0) for
+    # every edge and every state.
+    #
+    # What it buys. The within-island gradient
+    #     g_i = grad_W_i(x_i) + sum_{j in N_i cap V_r} d/dx_i grad_W_ij
+    # is built by a Python loop over E_r in both _stability_bracket and
+    # _psi_reconnection. Under this declaration every summand is a zero
+    # vector, so the loop adds nothing and is skipped. On the 20-node
+    # benchmark that loop ran grad_W_ij 30.0 million times for 17.8 s of
+    # pure arithmetic on zeros.
+    #
+    # A BOOLEAN, not "W_ij is None". Deriving the fact from a None
+    # callable would change what the field MEANS -- from "a function you
+    # can call" to "a function you must first test for None" -- and W_ij
+    # and grad_W_ij are called directly from _stability_bracket's W_r sum,
+    # _psi_reconnection's Parts 3 and 4, baseline/milp.py's certificate,
+    # and tests. Every one of those call sites would need a guard, and a
+    # missed guard is a TypeError at a random sample rather than a
+    # declaration that is simply absent. The boolean adds a claim without
+    # removing a capability, and defaults to False so every existing model
+    # keeps the loop.
+    #
+    # WARNING -- dataclasses.replace INHERITS this, exactly as it inherits
+    # island_quadratic_form. A model derived from linear consensus by
+    # giving it a real edge energy keeps the declaration unless it passes
+    # zero_pairwise_energy=False, and would then silently compute g_i
+    # without its edge terms. tests/conftest.py's synthetic edge-energy
+    # model is the worked example, and _verify_zero_pairwise is the
+    # runtime backstop.
+    zero_pairwise_energy: bool = False
+
 
 def linear_consensus_model(node_weights, edge_weights):
     """SystemModel for grounded linear consensus (spec section 10).
@@ -435,33 +579,6 @@ def linear_consensus_model(node_weights, edge_weights):
     # model may legitimately be evaluated at more than one state dimension
     # d (the d=1 and d=2 F6 tests do exactly that), and the pair's two
     # halves are built from x_i and x_j independently.
-    _zero_grads = {}
-
-    def _shared_zero(like):
-        key = (like.shape, like.dtype)
-        zero = _zero_grads.get(key)
-        if zero is None:
-            # THE CONTRACT, stated narrowly. This is a correct substitute
-            # for np.zeros_like on ORDINARY ndarrays whose (shape, dtype)
-            # determine the result -- which is what every caller passes: a
-            # 1-D float64 slice of a samples array.
-            #
-            # It is NOT a general equivalent, because the key omits two
-            # things zeros_like honours:
-            #   - memory order. A C-contiguous (2,2) followed by an
-            #     F-contiguous (2,2) gets the cached C-contiguous zero,
-            #     where zeros_like would return F-contiguous.
-            #   - subclass. An ndarray followed by an np.matrix of the
-            #     same shape and dtype gets an ndarray, where
-            #     zeros_like(matrix) returns a matrix.
-            # Neither reaches the current callers, and neither would change
-            # a value -- only layout and type. Widen the key before using
-            # this model with F-ordered or subclassed states.
-            zero = np.zeros_like(like)
-            zero.flags.writeable = False
-            _zero_grads[key] = zero
-        return zero
-
     def grad_W_ij(i, j, x_i, x_j):
         return (_shared_zero(x_i), _shared_zero(x_j))
 
@@ -547,12 +664,141 @@ def linear_consensus_model(node_weights, edge_weights):
         f_i=f_i, f_ij=f_ij, W_i=W_i, W_ij=W_ij,
         grad_W_i=grad_W_i, grad_W_ij=grad_W_ij, sampler=sampler,
         island_quadratic_form=island_quadratic_form,
+        # W_ij and grad_W_ij above are identically zero for this model.
+        zero_pairwise_energy=True,
         inflation=inflation,
         counterexample=linear_counterexample(node_weights, edge_weights),
     )
 
 
-def _stability_bracket(nodes, edges, neighbors, states, model, k, hinge=True):
+# Edges already checked against a model's zero_pairwise_energy claim.
+# WeakKeyDictionary for the same reason as _verified_quadratic_forms: the
+# entry dies with the model rather than pinning seven callables and their
+# closures for the life of the process.
+_verified_zero_pairwise = weakref.WeakKeyDictionary()
+
+
+def _verify_zero_pairwise(model, edges, states):
+    """Check a model's zero_pairwise_energy claim against its callables.
+
+    THE HAZARD, and it is the same one island_quadratic_form has:
+    `dataclasses.replace` INHERITS the declaration. A model derived from
+    linear consensus by swapping in a real edge energy keeps
+    zero_pairwise_energy=True unless it says otherwise, and g_i is then
+    computed without its edge terms -- silently, with no signature
+    mismatch, in both F5's fallback path and every part of F6.
+
+    PER (EDGE, STATE DOMAIN), not once per model. The claim is about every
+    edge, and a model whose pairwise terms vanish on some edges and not
+    others -- a weight that happens to be zero, a lookup keyed on the
+    pair -- would otherwise be blessed by the first edge that agrees.
+    That is the same escape a single blessed island opened for the closed
+    form. d and dtype join it for the reasons given at the key below. The
+    cost is paid once per combination: |E| edges per topology at the one
+    or two dimensions a run uses, against the millions of skipped calls
+    the declaration buys.
+
+    CHEAPER THAN THE CLOSED FORM'S CHECK, deliberately. There is no
+    matrix to reconstruct here, only a claim that two functions return
+    zero, so the check evaluates them and compares against zero exactly
+    -- no tolerance, because bit-identity of the skip depends on the term
+    being exactly zero, and "nearly zero" would not license dropping it.
+
+    WHAT IT PROBES. The real state this call was given, plus the
+    deterministic probe set used for the closed form, read as (x_u, x_v)
+    pairs. The real state is what the run actually evaluates; the probes
+    are what stop a model that happens to vanish on the states a
+    particular run drew. As with the closed form, this is not a proof:
+    grad_W_ij is an arbitrary function of (x_u, x_v), and no finite probe
+    set certifies one. It closes accidental inheritance, which is the
+    failure that actually happens.
+    """
+    try:
+        seen = _verified_zero_pairwise.setdefault(model, set())
+    except TypeError:
+        # Unhashable or non-weak-referenceable model: verify every time
+        # rather than crash, exactly as _verify_quadratic_form does.
+        seen = None
+
+    for edge in edges:
+        u, v = canon(edge)
+
+        # THE KEY IS (edge, domain), where the domain is the (shape,
+        # dtype) signature BOTH endpoints share -- taken from the shared
+        # helper rather than read off states[u], which is what let the
+        # third instance of this bug in. See _StateDomain for why the
+        # domain half is factored out and the edge half is not.
+        #
+        # Dropping the shape component reproduces the closed form's
+        # escape exactly: an edge whose pairwise terms vanish at d = 1 is
+        # marked verified, the same model and edge are presented at d = 2
+        # where they are nonzero, the second check is skipped, and F5
+        # returned 11.468133054826271 where the honest value with the
+        # declaration withheld is 4.4724463550769995. The probe set
+        # itself depends on d, so a d = 1 verification has not looked at
+        # cross-coordinate behaviour at all.
+        #
+        # dtype is KEYED rather than restricted away, which is the
+        # OPPOSITE of what F5's fast path does -- and deliberately. There
+        # the probes are compared under a 1e-9 tolerance, which sits below
+        # float32's own precision, so an honest float32 model would fail
+        # on rounding alone and rejection was the only coherent option.
+        # This check compares to EXACTLY zero, so there is no rounding
+        # regime to get wrong: a function that returns zero returns it in
+        # every precision, and one that does not is caught in whichever
+        # precision it is called in -- PROVIDED it is nonzero on the real
+        # state or one of the finite probes, which is the same limit
+        # every probe-based check here carries.
+        #
+        # The probes are cast to the state's dtype so the callables see
+        # what the run will actually hand them. The cast cannot itself
+        # manufacture a discrepancy: it only rounds the probe VALUES, and
+        # a model whose pairwise terms vanish identically returns zero on
+        # every input, rounded or not.
+        domain = _state_domain(
+            (states[u], states[v]), where=f"edge ({u}, {v})"
+        )
+        if seen is not None and (u, v, domain) in seen:
+            continue
+
+        pairs = [(np.asarray(states[u]), np.asarray(states[v]))]
+        pairs += [
+            (probe[0].astype(domain.dtype, copy=False),
+             probe[1].astype(domain.dtype, copy=False))
+            for probe in _quadratic_form_probes(2, domain.shape[0])
+        ]
+
+        for a, b in pairs:
+            energy = model.W_ij(u, v, a, b)
+            grad_u, grad_v = model.grad_W_ij(u, v, a, b)
+            if (
+                energy != 0.0
+                or not np.all(np.asarray(grad_u) == 0.0)
+                or not np.all(np.asarray(grad_v) == 0.0)
+            ):
+                raise ValueError(
+                    f"this model declares zero_pairwise_energy=True, but on "
+                    f"edge ({u}, {v}) its own callables give "
+                    f"W_ij = {energy!r} and grad_W_ij = "
+                    f"({grad_u!r}, {grad_v!r}), not zero.\n"
+                    "  The declaration lets F5's fallback path and F6 skip "
+                    "the within-island gradient loop entirely, so a model "
+                    "that declares it wrongly computes g_i without its edge "
+                    "terms and returns a different number with no error.\n"
+                    "  dataclasses.replace INHERITS the declaration: a "
+                    "model derived by swapping W_ij or grad_W_ij must pass "
+                    "zero_pairwise_energy=False. See "
+                    "tests/conftest.py's synthetic edge-energy model."
+                )
+
+        if seen is not None:
+            seen.add((u, v, domain))
+
+
+def _stability_bracket(
+    nodes, edges, neighbors, states, model, k, hinge=True,
+    trust_zero_pairwise=True,
+):
     """Shared bracket computation for F5 and F6 (spec sections 9 and 14).
 
     `nodes` is the unit's node set (an island for F5, a reconnected
@@ -561,10 +807,18 @@ def _stability_bracket(nodes, edges, neighbors, states, model, k, hinge=True):
     node -> x_i for this sample. Returns max(bracket, 0.0).
     """
     grad_W = {i: model.grad_W_i(i, states[i]) for i in nodes}
-    for u, v in edges:
-        grad_u, grad_v = model.grad_W_ij(u, v, states[u], states[v])
-        grad_W[u] = grad_W[u] + grad_u
-        grad_W[v] = grad_W[v] + grad_v
+    # Skipped under the model's zero_pairwise_energy declaration: every
+    # summand would be a zero vector. See SystemModel for what the
+    # declaration asserts and _verify_zero_pairwise for the check;
+    # trust_zero_pairwise=False forces the full loop, which is what
+    # _verify_quadratic_form needs -- a reference that trusted the same
+    # declaration as the closed form would agree with it for the wrong
+    # reason.
+    if not (trust_zero_pairwise and model.zero_pairwise_energy):
+        for u, v in edges:
+            grad_u, grad_v = model.grad_W_ij(u, v, states[u], states[v])
+            grad_W[u] = grad_W[u] + grad_u
+            grad_W[v] = grad_W[v] + grad_v
 
     dyn = {}
     for i in nodes:
@@ -725,7 +979,7 @@ def _quadratic_form_probes(size, d):
     return probes
 
 
-def _verify_quadratic_form(model, island, edges_r, config, d):
+def _verify_quadratic_form(model, island, edges_r, config, domain):
     """Check a model's closed form against its own callables, per island.
 
     THE HAZARD. `island_quadratic_form` is derived from W_i, W_ij, f_i and
@@ -752,12 +1006,15 @@ def _verify_quadratic_form(model, island, edges_r, config, d):
     establish -- they are complete for a symmetric QUADRATIC bracket, not
     a proof against arbitrary nonlinear replacement.
 
-    THE PROBES ARE float64, and dtype is deliberately absent from the
-    key: `f5_stability_penalty` rejects any other sample dtype before
-    reaching here, so there is only one to verify against. Adding dtype
-    to the key would NOT have been enough on its own -- the probes are
-    built as float64 regardless, so a float32 model would still have been
-    checked in the wrong precision.
+    THE PROBES ARE float64. `f5_stability_penalty` rejects any other
+    sample dtype before reaching here, so there is only one to verify
+    against -- but the domain's dtype is still part of the key, because a
+    key that silently describes only part of what a check covered is the
+    failure this file has now hit three times. Keying dtype alone would
+    NOT have been enough had the restriction not been there: the probes
+    are built as float64 regardless, so a float32 model would still have
+    been checked in the wrong precision. _verify_zero_pairwise, which has
+    no such restriction, casts its probes to the domain's dtype instead.
 
     WHY __post_init__ CANNOT DO THIS. `replace()` does call __post_init__,
     including for frozen dataclasses (verified, contrary to a common
@@ -765,14 +1022,18 @@ def _verify_quadratic_form(model, island, edges_r, config, d):
     by REAL node identifiers (`node_weights[i]`), so it has no data to
     probe with until an actual island exists.
     """
-    # d belongs in the key: the probe SET depends on it (the
+    # The domain belongs in the key, and comes from the shared
+    # _state_domain helper so that the shape and dtype components cannot
+    # be assembled inconsistently here and in _verify_zero_pairwise.
+    #
+    # d belongs in it: the probe SET depends on it (the
     # all-coordinates probes exist only for d > 1), so a model verified
     # at d = 1 has not been checked for cross-coordinate behaviour at
     # all. Omitting it let a model whose f_i couples coordinates only
     # when d > 1 pass at d = 1 and then run unchecked at d = 2. This
     # project evaluates one model at more than one dimension -- the F6
     # d=1 and d=2 tests do exactly that.
-    key = (frozenset(island), frozenset(edges_r), config.k_1, d)
+    key = (frozenset(island), frozenset(edges_r), config.k_1, domain)
     try:
         seen = _verified_quadratic_forms.setdefault(model, set())
         if key in seen:
@@ -790,14 +1051,15 @@ def _verify_quadratic_form(model, island, edges_r, config, d):
         neighbors[u].add(v)
         neighbors[v].add(u)
 
-    for probe in _quadratic_form_probes(len(members), d):
+    for probe in _quadratic_form_probes(len(members), domain.shape[0]):
         closed_form = float(np.einsum("ic,ij,jc->", probe, B, probe))
         states = {node: probe[index] for index, node in enumerate(members)}
         # RAW, and one probe at a time: summing first would let positive
         # and negative discrepancies cancel, and hinging first would hide
         # any disagreement below zero entirely.
         from_loop = _stability_bracket(
-            island, edges_r, neighbors, states, model, config.k_1, hinge=False
+            island, edges_r, neighbors, states, model, config.k_1,
+            hinge=False, trust_zero_pairwise=False,
         )
 
         # Explicitly, before the tolerance: abs(nan - nan) > tol is False,
@@ -819,7 +1081,10 @@ def _verify_quadratic_form(model, island, edges_r, config, d):
                 "describes it.\n"
                 "  Pass island_quadratic_form=None when deriving a model "
                 "whose energy or dynamics differ (see SystemModel), or "
-                "supply a closed form valid for the new model."
+                "supply a closed form valid for the new model. A model "
+                "with a nonzero W_ij must pass zero_pairwise_energy=False "
+                "as well -- that field is inherited by the same route and "
+                "would drop the edge terms from g_i."
             )
 
     if seen is not None:
@@ -899,21 +1164,32 @@ def f5_stability_penalty(stable_islands, topology, model, samples, config):
                 "is given."
             )
 
+        # Once per call, not once per island: samples is one array, so
+        # every island reads the same domain out of it.
+        domain = _state_domain(samples[0], where="F5 samples")
+
         total = 0.0
         for island in stable_islands:
             edges_r = _induced_edges(island, topology)
             # Per island, not once per model: a first island that happens
             # to agree must not bless the rest of this call, let alone
             # every later one. See _verify_quadratic_form.
-            _verify_quadratic_form(
-                model, island, edges_r, config, samples.shape[2]
-            )
+            _verify_quadratic_form(model, island, edges_r, config, domain)
             members, B = quadratic_form(island, edges_r, config.k_1)
             rows = [node_index[node] for node in members]
             X = samples[:, rows, :]                     # (P, n_r, d)
             brackets = np.einsum("pic,ij,pjc->p", X, B, X)
             total += float(np.maximum(brackets, 0.0).sum())
         return config.alpha_1 / config.P_1 * total
+
+    # OUTSIDE the sample loop. _stability_bracket runs per sample per
+    # island, so a check inside it would be paid millions of times to
+    # protect a claim that cannot change between samples. Here it costs
+    # one pass over the islands, on the first sample's real states.
+    if model.zero_pairwise_energy and len(samples):
+        first = {i: samples[0][node_index[i]] for i in nodes}
+        for island in stable_islands:
+            _verify_zero_pairwise(model, _induced_edges(island, topology), first)
 
     total = 0.0
     for sample in samples:
@@ -955,14 +1231,36 @@ def _psi_reconnection(nodes, edges_r, neighbors, rec_neighbors, states, model, c
 
     All four parts are computed unconditionally. On models with W_ij == 0
     (e.g. linear consensus) Parts 2 and 3 come out zero on their own --
-    that is arithmetic, not a special case to branch on.
+    that is arithmetic, not a special case to branch on. The one place
+    such a model IS branched on is the g_i loop below, which adds only
+    zero vectors; that is skipped, under a declaration the caller has
+    verified, because it is pure cost rather than an arithmetic result.
     """
     # g_i -- within-island gradient, identical to F5's dW_r/dx_i.
     g = {i: model.grad_W_i(i, states[i]) for i in nodes}
-    for u, v in edges_r:
-        grad_u, grad_v = model.grad_W_ij(u, v, states[u], states[v])
-        g[u] = g[u] + grad_u
-        g[v] = g[v] + grad_v
+    # Skipped under zero_pairwise_energy, for the same reason and with the
+    # same declaration as _stability_bracket's copy of this loop: every
+    # summand is a zero vector. This was F6's single largest cost --
+    # 30.0 million grad_W_ij calls, 17.8 s on the 20-node benchmark, all
+    # of it adding zeros.
+    #
+    # Whether the sum vanishes is a property of the MODEL, not of the
+    # state, so it cannot be read off the returned values without first
+    # computing them -- which is the work being avoided. Hence a
+    # declaration, checked once per edge by _verify_zero_pairwise from
+    # the callers that own the island loop.
+    #
+    # NOT bit-identical in one corner, stated rather than glossed:
+    # `g[u] + zeros` flattens a -0.0 component to +0.0, and skipping it
+    # preserves the -0.0. Every consumer is np.dot into an accumulator
+    # that starts at +0.0, where +0.0 and -0.0 contribute identically, so
+    # no reachable value changes -- and the 10-, 20- and 30-node runs were
+    # compared with float.hex() to confirm it.
+    if not model.zero_pairwise_energy:
+        for u, v in edges_r:
+            grad_u, grad_v = model.grad_W_ij(u, v, states[u], states[v])
+            g[u] = g[u] + grad_u
+            g[v] = g[v] + grad_v
 
     # W_r -- within-island energy, identical to F5's.
     W_r = sum(model.W_i(i, states[i]) for i in nodes)
@@ -976,7 +1274,24 @@ def _psi_reconnection(nodes, edges_r, neighbors, rec_neighbors, states, model, c
         rec_i = rec_neighbors.get(i, ())
 
         # Reconnection dynamics at i: sum over N_i^rec only.
-        rec_flow = np.zeros_like(x_i)
+        #
+        # The accumulator starts at zero whatever the node, so it is the
+        # SHARED read-only zero rather than a fresh allocation: on the
+        # 20-node benchmark np.zeros_like ran 16.8 million times here for
+        # 13.9 s, about 4.5 per call. Every node still calls _shared_zero
+        # -- Part 1 needs the array whether or not rec_i is empty -- but
+        # no node makes a FRESH per-node allocation: the first call for a
+        # given (shape, dtype) fills the cache and every later one is a
+        # dict lookup.
+        #
+        # SAFE ONLY BECAUSE THIS LOOP REBINDS. `rec_flow = rec_flow +
+        # term` builds a new array and leaves the shared zero untouched;
+        # `rec_flow += term` would write into it in place and corrupt
+        # every later caller. The array is writeable=False, so that
+        # mistake raises rather than silently spreading -- but the reason
+        # this substitution is legitimate at all is the rebinding form
+        # above, not the guard.
+        rec_flow = _shared_zero(x_i)
         for k in rec_i:
             rec_flow = rec_flow + model.f_ij(i, k, x_i, states[k])
 
@@ -1070,6 +1385,14 @@ def f6_reconnection_stability(
         u, v = canon(edge)
         rec_neighbors.setdefault(u, set()).add(v)
         rec_neighbors.setdefault(v, set()).add(u)
+
+    # OUTSIDE the sample loop, as in F5's fallback path: the declaration
+    # is a property of the model, so one pass over the islands on the
+    # first sample's real states is the whole check.
+    if model.zero_pairwise_energy and len(samples):
+        first = {node: samples[0][node_index[node]] for node in nodes_all}
+        for island in stable_islands:
+            _verify_zero_pairwise(model, _induced_edges(island, topology), first)
 
     total = 0.0
     for sample in samples:

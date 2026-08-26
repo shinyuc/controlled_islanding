@@ -232,6 +232,19 @@ def test_the_objective_is_bit_identical_with_and_without_the_caches(monkeypatch)
     )
     tree = initial_spanning_tree(augmented_graph(topology))
 
+    # zero_pairwise_energy WITHHELD on both sides. Linear consensus
+    # declares it, which makes the g_i loops in _stability_bracket and
+    # _psi_reconnection skip grad_W_ij entirely -- and grad_W_ij is where
+    # the shared-zero cache lives, so with the declaration in place this
+    # test would only reach it through Psi_r's Part 2 across E^rec. The
+    # cache still serves every model that does not declare, so the old
+    # path is what this test needs to exercise. Withheld on the cached
+    # side too, or the two runs would differ in which code path they take
+    # rather than only in whether the caches are active.
+    problem = replace(
+        problem, model=replace(problem.model, zero_pairwise_energy=False)
+    )
+
     with_caches = evaluate(tree, problem)
 
     # Defeat BOTH caches: a fresh pair of zero arrays per grad_W_ij call,
@@ -245,7 +258,11 @@ def test_the_objective_is_bit_identical_with_and_without_the_caches(monkeypatch)
         NODE_AND_EDGE_FAULTS, reference_topology, seed=0, config=build_config()
     )
     reference = replace(
-        reference, model=replace(reference.model, grad_W_ij=fresh_zero_gradients)
+        reference,
+        model=replace(
+            reference.model, grad_W_ij=fresh_zero_gradients,
+            zero_pairwise_energy=False,
+        ),
     )
     monkeypatch.setattr(cost_module, "_induced_edges", _uncached_induced_edges)
     reference_tree = initial_spanning_tree(augmented_graph(reference_topology))
@@ -655,7 +672,10 @@ def _inherits_the_stale_form(base):
 
     Exactly the mistake that shipped once: swapping W_ij and grad_W_ij via
     dataclasses.replace, which inherits island_quadratic_form -- a form
-    derived on the assumption W_ij == 0, which this model breaks.
+    derived on the assumption W_ij == 0, which this model breaks. It now
+    inherits zero_pairwise_energy=True by the same route, which is wrong
+    for the same reason; both are left in place here deliberately, since
+    this helper's job is to be the un-fixed model.
     """
     def W_ij(i, j, x_i, x_j):
         delta = x_i - x_j
@@ -719,12 +739,17 @@ def test_the_check_passes_on_the_unmodified_model():
 
 
 def test_clearing_the_form_is_the_documented_escape():
-    # The fix the message prescribes must actually work: with the form
-    # cleared, the same derived model runs on the loop path.
+    # The fix the message prescribes must actually work: with BOTH
+    # inherited declarations cleared, the same derived model runs on the
+    # loop path. zero_pairwise_energy is inherited by exactly the same
+    # route as the closed form and is just as wrong on this model, so the
+    # message names both -- clearing only island_quadratic_form leaves a
+    # model that skips its own edge gradients.
     topology, problem = _ten_node()
     stable = [frozenset({1, 2, 3})]
     derived = replace(
-        _inherits_the_stale_form(problem.model), island_quadratic_form=None
+        _inherits_the_stale_form(problem.model),
+        island_quadratic_form=None, zero_pairwise_energy=False,
     )
 
     value = cost_module.f5_stability_penalty(

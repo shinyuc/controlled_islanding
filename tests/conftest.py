@@ -89,6 +89,14 @@ def synthetic_edge_energy_model():
             delta = x_i - x_j
             return (delta, -delta)
 
+        # zero_pairwise_energy MUST be cleared too, and for the same
+        # reason: this model's whole purpose is a NONZERO W_ij, and the
+        # declaration inherited from linear consensus would let
+        # _stability_bracket and _psi_reconnection skip the within-island
+        # gradient loop -- computing g_i without the very edge terms this
+        # fixture exists to exercise. Left set, it fails
+        # test_objective_matches_with_nonzero_edge_energy.
+        #
         # island_quadratic_form MUST be cleared. It is inherited by
         # dataclasses.replace from the linear-consensus base, but its
         # closed form assumes W_ij == 0 -- which is exactly what this
@@ -99,7 +107,7 @@ def synthetic_edge_energy_model():
         # noticed.
         return replace(
             base_model, W_ij=W_ij, grad_W_ij=grad_W_ij,
-            island_quadratic_form=None,
+            island_quadratic_form=None, zero_pairwise_energy=False,
         )
 
     return build
