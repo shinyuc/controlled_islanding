@@ -245,6 +245,7 @@ def save_result(
     cost_terms,
     final_island_witnesses,
     final_component_witnesses,
+    run_purpose=None,
     results_dir=None,
 ):
     """Write a JSON summary to <results_dir>/<example_name>_<timestamp>.json.
@@ -355,6 +356,18 @@ def save_result(
         # Discriminates this schema from save_failure_result's, which has
         # no partition, no cost terms and no lambda_min lists.
         "outcome": "solved",
+        # WHAT THIS RUN WAS FOR, when it was not an ordinary solve. Absent
+        # on ordinary runs, so no existing record changes shape.
+        #
+        # "outcome": "solved" only says the solver returned a partition.
+        # It does not say the result is READABLE: a run capped at one
+        # outer iteration returns a partition that was never re-solved
+        # against the witnesses its own pass discovered, so its cost terms
+        # and its comparison against the other method mean nothing. The
+        # terminal report says so at the time; without this field the JSON
+        # does not, and months later the file is indistinguishable from a
+        # real result sitting beside it in results/.
+        **({"run_purpose": run_purpose} if run_purpose is not None else {}),
         "runtime_seconds": float(runtime_seconds),
         "method": _method_block(method, result),
         "sample_seed": _plain(sample_seed),
@@ -452,6 +465,7 @@ def save_failure_result(
     info,
     error,
     outer_state=None,
+    run_purpose=None,
     results_dir=None,
 ):
     """Record a run that produced no solution at all.
@@ -508,6 +522,9 @@ def save_failure_result(
         "example_name": example_name,
         "timestamp": timestamp,
         "outcome": "no_incumbent",
+        # See save_result: absent on ordinary runs, present when the run
+        # was a probe or otherwise not a readable result.
+        **({"run_purpose": run_purpose} if run_purpose is not None else {}),
         "error": str(error),
         "runtime_seconds": float(runtime_seconds),
         "method": {
