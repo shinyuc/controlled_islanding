@@ -12,7 +12,7 @@ Weights come from the generated, seeded topology artifact
 (linear_20node_topology.py) -- see
 examples/linear_20node/generate_linear_20node.py. This case has no spec
 document of its own; it exists as a smaller, density-matched companion to
-the 50-node case for runtime comparison.
+the larger generated cases for runtime comparison.
 
 Importing this module defines builders and the setup only -- it never
 runs a solve or any computation beyond definitions.

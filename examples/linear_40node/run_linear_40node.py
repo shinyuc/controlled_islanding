@@ -88,7 +88,7 @@ def main():
     config = problem.config
 
     start = time.perf_counter()
-    # 10 rather than the 10-/50-node scripts' 20: the 20-node case
+    # 10 rather than the 10-node script's 20: the 20-node case
     # converged after SEVEN inner solves and six augmentations, so this
     # leaves headroom without letting a non-converging run go on
     # indefinitely. (Seven and six, not "6 passes" -- the two counts differ

@@ -70,8 +70,8 @@ def test_counts_and_density():
     topology = build_topology()
     assert len(list(topology.nodes())) == 10
     assert len(list(topology.edges())) == len(EDGES) == 19
-    # The generating parameter this case is built to share with the 30-,
-    # 40- and 50-node generators. Pinned because it is the whole reason
+    # The generating parameter this case is built to share with the 30-
+    # and 40-node generators. Pinned because it is the whole reason
     # the case exists: "the same rule at every size" is only true if the
     # rule's parameter is actually the same.
     assert PLANE_SIZE == pytest.approx(20.0 ** 0.5)
@@ -171,12 +171,12 @@ def test_the_faulty_node_was_chosen_over_its_structural_twin():
 
 
 def test_neither_endpoint_pair_of_the_faults_is_a_hidden_separator():
-    # THE TRAP THE 30-BUS AND 118-BUS CASES BOTH HIT: a set of nodes that
-    # are individually not articulation points can still be a cut set.
-    # Neither 1 nor 8 is an articulation point, yet {1, 8} split this
-    # graph 4/4, and {1, 10} strand {2, 4, 6}. This placement faults one
-    # node so the question does not arise -- but the fact is recorded so
-    # it is checked rather than remembered if the count ever rises.
+    # A SET OF NON-CUT VERTICES CAN STILL BE A CUT SET, which is easy to
+    # miss when faults are vetted one at a time against the articulation
+    # points. Neither 1 nor 8 is an articulation point, yet {1, 8} split
+    # this graph 4/4, and {1, 10} strand {2, 4, 6}. This placement faults
+    # one node so the question does not arise -- but the fact is checked
+    # here rather than remembered, in case the count ever rises.
     graph = _graph()
     for pair in ((1, 8), (1, 10)):
         assert not any(p in nx.articulation_points(graph) for p in pair)

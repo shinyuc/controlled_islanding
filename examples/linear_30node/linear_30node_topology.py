@@ -5,8 +5,8 @@
 
 Positions are drawn uniformly on a 7.75x7.75 plane; an edge
 connects every pair of nodes within Euclidean distance 2. The
-plane is smaller than the 50-node case's 10x10 so that node
-density, and hence average degree, is comparable -- see
+plane is sized to hold node density, and hence average degree,
+comparable with the other generated cases -- see
 generate_linear_30node.py. Faults are placed explicitly (see that
 generator's FAULTY_NODES/FAULTY_EDGES and the reasoning beside
 them), not taken as the first n nodes. The seed recorded here is

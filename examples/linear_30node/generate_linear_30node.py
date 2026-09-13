@@ -1,11 +1,17 @@
 """Seeded generator for the 30-node linear consensus example.
 
-Writes examples/linear_30node/linear_30node_topology.py. Unlike the IEEE
-30-bus case, both this generator and its output are committed -- the
-generator is our own code and seeded, so there's no copyright or
-reproducibility reason to hide it. Mirrors
-examples/linear_50node/generate_linear_50node.py so the two cases are
-directly comparable.
+Writes examples/linear_30node/linear_30node_topology.py. Both this generator and
+its output are committed: the generator is our own code and seeded,
+so there is no reproducibility reason to keep either out of the
+repository. Mirrors the other generated cases so they are directly
+comparable.
+
+NOTE ON THE 50-NODE REFERENCES BELOW. That case was removed from
+the repository (it is not used in the paper), but its figures are
+quoted here because they are what the plane size was derived FROM:
+50 nodes on a 10x10 plane, 136 edges, average degree ~5.4, node
+density 0.500. Dropping the derivation would leave the plane size
+looking arbitrary.
 
 The plane is 7.75x7.75 rather than the 50-node case's 10x10. That is the
 whole point of the size: at the same edge radius, node density -- and
@@ -21,9 +27,10 @@ Holding density fixed is what keeps a cross-case comparison about
 size rather than about shape.
 
 Faults are placed EXPLICITLY here (FAULTY_NODES / FAULTY_EDGES below)
-rather than taken as "the first n nodes" like the 20- and 50-node cases.
-Arbitrary faults do not fragment a graph at this density, so those cases
-converge to a single stable island and never produce a reconnected edge,
+rather than taken as "the first n nodes" like the 20-node case.
+Arbitrary faults do not fragment a graph at this density, so that case
+converges to a single stable island and never produces a reconnected
+edge,
 leaving F4 and F6 unexercised. Explicit placement targets a known
 bottleneck instead -- see the constants for the reasoning.
 
@@ -196,8 +203,8 @@ def write_topology(result, output_path):
         "\n"
         "Positions are drawn uniformly on a 7.75x7.75 plane; an edge\n"
         "connects every pair of nodes within Euclidean distance 2. The\n"
-        "plane is smaller than the 50-node case's 10x10 so that node\n"
-        "density, and hence average degree, is comparable -- see\n"
+        "plane is sized to hold node density, and hence average degree,\n"
+        "comparable with the other generated cases -- see\n"
         "generate_linear_30node.py. Faults are placed explicitly (see that\n"
         "generator's FAULTY_NODES/FAULTY_EDGES and the reasoning beside\n"
         "them), not taken as the first n nodes. The seed recorded here is\n"

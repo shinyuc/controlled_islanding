@@ -20,11 +20,6 @@ results/
 paper/
 docs/
 
-# IEEE test-case source data and parsers (keep local, commit only derived topology)
-examples/ieee_30_bus/*.txt
-examples/ieee_30_bus/parse_*.py
-examples/ieee_118_bus/*.txt
-examples/ieee_118_bus/parse_*.py
 
 # Generated figures -- regenerate from the saved results with
 # presentation/plot_linear_30node.py

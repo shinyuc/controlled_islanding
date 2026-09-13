@@ -6,7 +6,7 @@ docs/example_linear_10node_spec.md section 8. See
 docs/run_linear_10_node_spec.md for the report format this follows.
 
 Writes a JSON summary via utils.save.save_result, matching the 20-, 30-
-and 50-node scripts, so every case produces a comparable result file.
+and larger scripts, so every case produces a comparable result file.
 
 How to run
 ----------

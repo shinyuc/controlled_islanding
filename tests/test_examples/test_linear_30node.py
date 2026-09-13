@@ -1,5 +1,5 @@
 """Structural tests for the 30-node linear consensus example, mirroring
-tests/test_examples/test_linear_50node.py one for one. With random
+tests/test_examples/test_linear_40node.py one for one. With random
 weights, specific islands can't be hand-verified -- these check
 structural invariants, not outcomes. None of these call solve().
 """
@@ -53,7 +53,7 @@ def test_full_system_is_genuinely_unstable():
 
 
 def test_faults_are_placed_where_intended():
-    # Unlike the 20-/50-node cases, faults here are placed explicitly
+    # Unlike the 20-node case, faults here are placed explicitly
     # (generate_linear_30node.py's FAULTY_NODES/FAULTY_EDGES), so the exact
     # identities are part of the fixture, not an artifact of "first n nodes".
     assert faulty_nodes(LINEAR_30) == [5, 16]
@@ -146,8 +146,9 @@ def test_no_argument_main_writes_the_committed_bytes(tmp_path, monkeypatch):
 
     # Pinned explicitly, not just implied by the bytes below: the byte
     # comparison alone cannot catch a seed regression whose retry loop
-    # happens to land on the right draw anyway. See the 50-node case,
-    # where exactly that is possible.
+    # happens to land on the right draw anyway -- a generator whose
+    # DEFAULT_SEED changed but whose loop advanced to the same
+    # successful seed would write identical bytes.
     assert generator.DEFAULT_SEED == 26
 
     generator.main()

@@ -16,7 +16,7 @@ THE RULE, applied without selection. Node positions uniform on a square,
 an edge wherever the Euclidean distance is at most EDGE_RADIUS = 2,
 redrawn from scratch at the next seed until the graph is connected. The
 side is sqrt(20) = 4.4721, which puts node density at 10 / 4.4721^2 =
-0.500 -- the figure the 30-, 40- and 50-node generators state and hold.
+0.500 -- the figure the 30- and 40-node generators state and hold.
 
 THE RESULTING AVERAGE DEGREE IS 3.80, below the 20-node case's 4.20 and
 the 30-/40-node cases' ~5.45. That is a finite-size effect of random
@@ -50,7 +50,7 @@ OUTPUT_PATH = HERE / "linear_10node_rgg_topology.py"
 
 N_NODES = 10
 # sqrt(N / 0.500): the side that puts this case at the same node density
-# as the 30-, 40- and 50-node generators, which is the parameter those
+# as the 30- and 40-node generators, which is the parameter those
 # generators are written to control.
 PLANE_SIZE = 20.0 ** 0.5
 EDGE_RADIUS = 2.0
@@ -81,10 +81,12 @@ DEFAULT_SEED = 0
 #     {6, 10}  -> 1 / 7, isolating {2}
 #
 # The last is trivial for the substantial-component analysis -- a single
-# node -- but belongs with the others: a set of non-cut vertices can
-# still be a cut set, and the 30-bus and 118-bus cases were both shaped
-# by exactly that trap. This placement faults a single node so the
-# question does not arise here, but it would if the count ever rose.
+# node -- but belongs with the others, because the general fact is easy
+# to miss: A SET OF NON-CUT VERTICES CAN STILL BE A CUT SET. Checking
+# each candidate fault individually against the articulation points is
+# not sufficient; the set has to be checked jointly. This placement
+# faults a single node so the question does not arise here, but it
+# would the moment the count rose above one.
 #
 # FAULTY_EDGES: (1, 7) and (3, 8). Both lie inside the upper cluster
 # {1, 3, 5, 7, 8, 9}, neither is incident to node 5, and they are
@@ -244,8 +246,8 @@ def write_topology(result, output_path):
         "\n"
         "Positions are drawn uniformly on a sqrt(20) x sqrt(20) plane; an\n"
         "edge connects every pair of nodes within Euclidean distance 2.\n"
-        "The side puts node density at 0.500, the figure the 30-, 40- and\n"
-        "50-node generators hold. The resulting average degree is 3.80,\n"
+        "The side puts node density at 0.500, the figure the 30- and\n"
+        "40-node generators hold. The resulting average degree is 3.80,\n"
         "BELOW the larger cases' 4.20 and ~5.45: that is a finite-size\n"
         "effect of random geometric graphs, not a defect, and the seed was\n"
         "not chosen to hide it. See generate_linear_10node_rgg.py.\n"

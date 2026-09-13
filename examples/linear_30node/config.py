@@ -16,8 +16,8 @@ c_ij = 1, versus 10 nodes and 17 edges. The same alpha therefore buys
 proportionally less influence over the search here, so expect to need a
 larger value. Run a sweep before trusting any result from this case.
 
-Starts from the same values as the 50-node case
-(examples/linear_50node/config.py), so the two stay comparable until
+Starts from the same values as every other case, so they stay
+comparable until
 either is tuned.
 """
 

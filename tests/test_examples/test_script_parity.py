@@ -42,13 +42,6 @@ from examples.linear_10node_rgg import (
 from examples.linear_20node import run_linear_20node, run_baseline_20node
 from examples.linear_30node import run_linear_30node, run_baseline_30node
 from examples.linear_40node import run_linear_40node, run_baseline_40node
-from examples.linear_50node import run_linear_50node, run_baseline_50node
-from examples.ieee_30_bus import (
-    run_ieee_30_bus, run_baseline_ieee_30_bus,
-)
-from examples.ieee_118_bus import (
-    run_ieee_118_bus, run_baseline_ieee_118_bus,
-)
 
 
 # (case name, local-search script, MILP baseline script)
@@ -58,9 +51,6 @@ PAIRS = [
     ("20node", run_linear_20node, run_baseline_20node),
     ("30node", run_linear_30node, run_baseline_30node),
     ("40node", run_linear_40node, run_baseline_40node),
-    ("50node", run_linear_50node, run_baseline_50node),
-    ("ieee30bus", run_ieee_30_bus, run_baseline_ieee_30_bus),
-    ("ieee118bus", run_ieee_118_bus, run_baseline_ieee_118_bus),
 ]
 PAIR_IDS = [pair[0] for pair in PAIRS]
 
@@ -83,12 +73,6 @@ SCRIPTS = [
     ("30node-milp", run_baseline_30node),
     ("40node-local", run_linear_40node),
     ("40node-milp", run_baseline_40node),
-    ("50node-local", run_linear_50node),
-    ("50node-milp", run_baseline_50node),
-    ("ieee30bus-local", run_ieee_30_bus),
-    ("ieee30bus-milp", run_baseline_ieee_30_bus),
-    ("ieee118bus-local", run_ieee_118_bus),
-    ("ieee118bus-milp", run_baseline_ieee_118_bus),
 ]
 SCRIPT_IDS = [entry[0] for entry in SCRIPTS]
 LOCAL_SCRIPTS = [entry for entry in SCRIPTS if entry[0].endswith("local")]

@@ -11,7 +11,7 @@ EDGES, and passes the topology in wherever one is needed (`build_M`,
 Algorithm parameters are deliberately NOT here: `AlgorithmConfig` choices
 (alpha, k, P, ...) differ substantially per case, so each case owns its own
 `build_config()` in its own config module -- examples/linear_10node/config.py,
-examples/linear_50node/config.py. `build_problem` takes the resulting config
+examples/linear_30node/config.py. `build_problem` takes the resulting config
 as a required argument.
 
 Importing this module defines builders only -- it never runs a solve or
@@ -80,7 +80,7 @@ def build_problem(setup, topology, config, seed=None):
     `config` is required -- parameter choices differ substantially per case,
     so there is no shared baseline to fall back to. Pass the one from the
     case's own config module (examples/linear_10node/config.py,
-    examples/linear_50node/config.py).
+    examples/linear_30node/config.py).
 
     It has to be supplied *here* rather than swapped onto the returned
     Problem afterwards, because the draw below reads beta/gamma/P_1/P_2 --

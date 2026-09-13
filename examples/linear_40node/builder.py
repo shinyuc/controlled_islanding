@@ -12,7 +12,7 @@ Weights come from the generated, seeded topology artifact
 (linear_40node_topology.py) -- see
 examples/linear_40node/generate_linear_40node.py. This case has no spec
 document of its own; it exists as a density-matched companion to the
-20-, 30- and 50-node cases for runtime comparison, and it is the largest
+20- and 30-node cases for runtime comparison, and it is the largest
 case whose faults are placed explicitly against a measured bottleneck
 rather than taken as "the first n nodes".
 

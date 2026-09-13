@@ -3,6 +3,13 @@
 Writes examples/linear_40node/linear_40node_topology.py. Both this
 generator and its output are committed -- the generator is our own code
 and seeded, so there is no copyright or reproducibility reason to hide it.
+REFERENCES TO THE 50-NODE CASE. That case is no longer in the
+repository -- it is not used in the paper -- but its figures are
+quoted below because the plane size was derived FROM them: 50 nodes
+on a 10x10 plane, 136 edges, average degree 5.44, node density
+0.500. The derivation is kept so the plane size does not read as an
+arbitrary constant; the case itself is not there to look at.
+
 Mirrors examples/linear_30node/generate_linear_30node.py so the cases are
 directly comparable.
 
@@ -21,9 +28,10 @@ Holding density fixed is what keeps a cross-case comparison about
 size rather than about shape.
 
 Faults are placed EXPLICITLY here (FAULTY_NODES / FAULTY_EDGES below)
-rather than taken as "the first n nodes" like the 20- and 50-node cases.
-Arbitrary faults do not fragment a graph at this density, so those cases
-converge to a single stable island and never produce a reconnected edge,
+rather than taken as "the first n nodes" like the 20-node case.
+Arbitrary faults do not fragment a graph at this density, so that case
+converges to a single stable island and never produces a reconnected
+edge,
 leaving F4 and F6 unexercised. Explicit placement targets a measured
 bottleneck instead -- the placement was chosen only after generating the
 healthy graph and inspecting its articulation points and cluster
@@ -62,11 +70,9 @@ DEFAULT_SEED = 36
 
 # Explicit fault placement, chosen against this draw's structure.
 #
-# Arbitrary faults do not fragment a graph at this density, so a case with
-# faults scattered at random converges to a single stable island and never
-# produces a reconnected edge -- leaving F4 and F6 unexercised. That is
-# what happens in the 20- and 50-node cases, which take "the first n
-# nodes" as faulty. Placement here targets a measured bottleneck instead.
+# Placement targets a measured bottleneck rather than scattering faults
+# at random -- see the module docstring for why the latter leaves F4 and
+# F6 unexercised at this density.
 #
 # FAULTY_EDGES: two of the THREE edges crossing the cluster
 # {4, 7, 16, 19, 27, 32, 33, 38, 39, 40} -- (10,16), (17,38) and (26,38).
@@ -264,7 +270,7 @@ def write_topology(result, output_path):
         "Positions are drawn uniformly on an 8.94x8.94 plane; an edge\n"
         "connects every pair of nodes within Euclidean distance 2. The\n"
         "plane is sized so that node density, and hence average\n"
-        "degree, matches the 30- and 50-node cases -- see\n"
+        "degree, matches the 30-node case -- see\n"
         "generate_linear_40node.py. Faults are placed explicitly (see that\n"
         "generator's FAULTY_NODES/FAULTY_EDGES and the reasoning beside\n"
         "them), not taken as the first n nodes. The seed recorded here is\n"

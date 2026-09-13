@@ -1,11 +1,17 @@
 """Seeded generator for the 20-node linear consensus example.
 
-Writes examples/linear_20node/linear_20node_topology.py. Unlike the IEEE
-30-bus case, both this generator and its output are committed -- the
-generator is our own code and seeded, so there's no copyright or
-reproducibility reason to hide it. Mirrors
-examples/linear_50node/generate_linear_50node.py so the two cases are
-directly comparable.
+Writes examples/linear_20node/linear_20node_topology.py. Both this generator and
+its output are committed: the generator is our own code and seeded,
+so there is no reproducibility reason to keep either out of the
+repository. Mirrors the other generated cases so they are directly
+comparable.
+
+NOTE ON THE 50-NODE REFERENCES BELOW. That case was removed from
+the repository (it is not used in the paper), but its figures are
+quoted here because they are what the plane size was derived FROM:
+50 nodes on a 10x10 plane, 136 edges, average degree ~5.4, node
+density 0.500. Dropping the derivation would leave the plane size
+looking arbitrary.
 
 The plane is 6x6 rather than the 50-node case's 10x10. That is the whole
 point of the size: at the same edge radius, node density -- and hence
@@ -14,13 +20,23 @@ cases measures density rather than size. The 50-node case has 136 edges
 over 50 nodes (average degree ~5.4), and both dimensions bear on cost: edge count drives the
 certificate families and the local search's neighbourhood, while node
 count drives the MILP's assignment binaries and the sample arrays.
-Holding density fixed is what keeps a cross-case comparison about
-size rather than about shape.
+Keeping density in the same range is what keeps a cross-case comparison
+about size rather than about shape.
+
+NOT EXACTLY FIXED, and the wording above is deliberately weaker than the
+other generators'. A 6x6 plane at N = 20 gives 20 / 36 = 0.5556 nodes
+per unit area, against the 0.500 the 30- and 40-node cases hold (0.4995
+and 0.5005 as implemented) and the 10-node RGG case's exact 0.500. This
+case is the outlier, by about 11%. The emitted artefact has always said
+"comparable" rather than "fixed"; this docstring now agrees with it.
 
 Usage:
     python examples/linear_20node/generate_linear_20node.py [seed] [n_faults]
 
-Defaults: seed=0, n_faults=3 (proportional to the 50-node case's 7 of 50).
+Defaults: seed=0, n_faults=3. The count is proportional to the 7 faults
+of 50 nodes used by the 50-node case, which set the ratio; that case is
+no longer in the repository (see the note above), but the derivation is
+recorded because it is the provenance of the 3.
 """
 
 import sys
@@ -126,9 +142,9 @@ def write_topology(result, n_faults, output_path):
         "\n"
         "Positions are drawn uniformly on a 6x6 plane; an edge connects\n"
         "every pair of nodes within Euclidean distance 2. The plane is\n"
-        "smaller than the 50-node case's 10x10 so that node density, and\n"
-        "hence average degree, is comparable -- see\n"
-        "generate_linear_20node.py. The seed recorded here is the one that\n"
+        "sized to hold node density, and hence average degree, comparable\n"
+        "with the other generated cases -- see generate_linear_20node.py\n"
+        "for the derivation. The seed recorded here is the one that\n"
         "produced a connected graph (see that generator's\n"
         "connectivity-retry loop). Weights are part of the artifact, not\n"
         "just the topology -- this case is not reproducible from\n"

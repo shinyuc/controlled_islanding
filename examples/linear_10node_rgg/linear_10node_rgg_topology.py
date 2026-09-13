@@ -5,8 +5,8 @@
 
 Positions are drawn uniformly on a sqrt(20) x sqrt(20) plane; an
 edge connects every pair of nodes within Euclidean distance 2.
-The side puts node density at 0.500, the figure the 30-, 40- and
-50-node generators hold. The resulting average degree is 3.80,
+The side puts node density at 0.500, the figure the 30- and
+40-node generators hold. The resulting average degree is 3.80,
 BELOW the larger cases' 4.20 and ~5.45: that is a finite-size
 effect of random geometric graphs, not a defect, and the seed was
 not chosen to hide it. See generate_linear_10node_rgg.py.

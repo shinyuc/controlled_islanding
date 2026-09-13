@@ -1,5 +1,5 @@
 """Structural tests for the 20-node linear consensus example, mirroring
-tests/test_examples/test_linear_50node.py one for one. With random
+tests/test_examples/test_linear_40node.py one for one. With random
 weights, specific islands can't be hand-verified -- these check
 structural invariants, not outcomes. None of these call solve().
 """

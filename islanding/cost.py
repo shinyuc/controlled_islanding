@@ -920,12 +920,24 @@ def _quadratic_form_probes(size, d):
     each bracket is itself O(n + |E_r|). Measured, as a share of total
     run time spent inside _verify_quadratic_form: 1.6% -> 4.4% on the
     10-node case, 2.6% -> 8.7% on the 20-node, 5.3% -> 17.8% on the
-    30-node. A single whole-graph island at n = 50, d = 2 takes 5104
-    probes and 2.15 s against 1329 and 0.57 s. The share grows like n^3
-    against the rest of the run, which it did before this change too --
-    the change multiplies it by a constant. If it ever becomes the
-    dominant cost at 50 nodes, the alternative is to go back to
-    member-only probes and narrow the claim to coordinate-decoupled
+    30-node.
+
+    The n^3 growth is ANALYTIC, not extrapolated from a measurement:
+    O((n d)^2) bracket evaluations, each itself O(n + |E_r|), gives
+    O(n^3) at fixed d. The probe counts are likewise derivable from the
+    construction rather than observed -- a whole-graph island at n = 50,
+    d = 2 takes n*d + C(n*d, 2) + n + 4 = 5104 probes, against
+    n + C(n, 2) + n + 4 = 1329 under member-only probing. Both figures
+    follow from _quadratic_form_probes and can be checked by calling it.
+
+    The corresponding WALL-CLOCK times, 2.15 s and 0.57 s, are
+    historical observations on a 50-node case no longer in this
+    repository; they cannot be reproduced from here, and nothing above
+    depends on them. The share grows like n^3 against the rest of the
+    run, which it did before this change too -- the change multiplies
+    it by a constant. If it ever becomes the dominant cost at a size
+    larger than the 40 nodes now present, the alternative is to go back
+    to member-only probes and narrow the claim to coordinate-decoupled
     brackets; it is not acceptable to keep the wider claim on the
     narrower probe set.
 
@@ -1130,7 +1142,7 @@ def f5_stability_penalty(stable_islands, topology, model, samples, config):
     # is what the arithmetic actually bounds (~1e-16 per operation), so on
     # an instance whose F5 ran to 1e6 an absolute 1e-12 would be tighter
     # than float64 can deliver and would have to be revisited. Nothing in
-    # the 10- to 50-node cases is near that.
+    # the 10- to 40-node cases is near that.
     quadratic_form = model.island_quadratic_form
     if quadratic_form is not None:
         # DTYPE IS PART OF WHAT THE CLOSED FORM CLAIMS. The verification

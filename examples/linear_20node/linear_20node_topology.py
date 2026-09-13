@@ -4,9 +4,9 @@
 
 Positions are drawn uniformly on a 6x6 plane; an edge connects
 every pair of nodes within Euclidean distance 2. The plane is
-smaller than the 50-node case's 10x10 so that node density, and
-hence average degree, is comparable -- see
-generate_linear_20node.py. The seed recorded here is the one that
+sized to hold node density, and hence average degree, comparable
+with the other generated cases -- see generate_linear_20node.py
+for the derivation. The seed recorded here is the one that
 produced a connected graph (see that generator's
 connectivity-retry loop). Weights are part of the artifact, not
 just the topology -- this case is not reproducible from

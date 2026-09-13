@@ -473,12 +473,17 @@ def main():
             "identical instances, N = 10/20/30/40, all run locally and "
             "sequentially on one machine."
         ),
-        "excluded": (
-            "N = 50 is deliberately absent: the only 50-node result was "
-            "produced on different hardware, and wall-clock runtimes from "
-            "two machines cannot share a table. The N = 10 entry is "
+        # RENAMED from "excluded", and that is a change to the EMITTED
+        # summary, not only to a comment: a consumer keyed on the old name
+        # would find nothing. Nothing in this repository reads either key
+        # -- presentation/table_milp_benchmark.py does not touch it -- and
+        # summaries written before the rename keep their old field, so an
+        # external reader of both will see the two names.
+        "scope": (
+            "The study covers the four network sizes present in the "
+            "repository: N = 10, 20, 30, 40. The N = 10 entry is "
             "linear_10node_rgg, drawn by the same random geometric rule as "
-            "the other three sizes -- NOT examples/linear_10node/, whose "
+            "the other three -- NOT examples/linear_10node/, whose "
             "hand-specified topology would not belong in a scaling table "
             "beside them."
         ),

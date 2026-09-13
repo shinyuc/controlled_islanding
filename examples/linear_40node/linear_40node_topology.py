@@ -6,7 +6,7 @@
 Positions are drawn uniformly on an 8.94x8.94 plane; an edge
 connects every pair of nodes within Euclidean distance 2. The
 plane is sized so that node density, and hence average
-degree, matches the 30- and 50-node cases -- see
+degree, matches the 30-node case -- see
 generate_linear_40node.py. Faults are placed explicitly (see that
 generator's FAULTY_NODES/FAULTY_EDGES and the reasoning beside
 them), not taken as the first n nodes. The seed recorded here is

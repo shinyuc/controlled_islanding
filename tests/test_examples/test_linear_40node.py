@@ -93,7 +93,7 @@ def test_full_system_is_genuinely_unstable():
 
 
 def test_faults_are_placed_where_intended():
-    # Unlike the 20-/50-node cases, faults here are placed explicitly
+    # Unlike the 20-node case, faults here are placed explicitly
     # (generate_linear_40node.py's FAULTY_NODES/FAULTY_EDGES), so the exact
     # identities are part of the fixture, not an artifact of "first n nodes".
     assert faulty_nodes(LINEAR_40) == [8, 24]
@@ -323,8 +323,9 @@ def test_no_argument_main_writes_the_committed_bytes(tmp_path, monkeypatch):
 
     # Pinned explicitly, not just implied by the bytes below: the byte
     # comparison alone cannot catch a seed regression whose retry loop
-    # happens to land on the right draw anyway. See the 50-node case,
-    # where exactly that is possible.
+    # happens to land on the right draw anyway -- a generator whose
+    # DEFAULT_SEED changed but whose loop advanced to the same
+    # successful seed would write identical bytes.
     assert generator.DEFAULT_SEED == 36
 
     generator.main()
